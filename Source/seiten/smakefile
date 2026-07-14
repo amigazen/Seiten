@@ -1,0 +1,56 @@
+#
+# Source/seiten/smakefile - Seiten GUI + CLI
+#
+
+CC = sc
+LD = slink
+RM = delete force quiet
+
+OBJS = main.o cli.o engine.o utf8fold.o imgload.o \
+	gui_main.o gui_timeline.o gui_login.o gui_compose.o gui_speedbar.o \
+	version.o libbases.o
+
+all: Seiten
+
+Seiten: $(OBJS) smakefile.wth
+	$(LD) WITH smakefile.wth WITH LIB:utillib.with
+
+main.o: main.c
+	$(CC) main.c
+
+cli.o: cli.c engine.h gui.h
+	$(CC) cli.c
+
+engine.o: engine.c engine.h
+	$(CC) engine.c
+
+utf8fold.o: utf8fold.c utf8fold.h
+	$(CC) utf8fold.c
+
+imgload.o: imgload.c imgload.h engine.h
+	$(CC) imgload.c
+
+gui_main.o: gui_main.c gui.h engine.h
+	$(CC) gui_main.c
+
+gui_timeline.o: gui_timeline.c gui.h utf8fold.h imgload.h engine.h
+	$(CC) gui_timeline.c
+
+gui_login.o: gui_login.c gui.h engine.h
+	$(CC) gui_login.c
+
+gui_compose.o: gui_compose.c gui.h engine.h imgload.h
+	$(CC) gui_compose.c
+
+gui_speedbar.o: gui_speedbar.c gui.h engine.h imgload.h
+	$(CC) gui_speedbar.c
+
+version.o: version.c
+	$(CC) version.c
+
+libbases.o: libbases.c
+	$(CC) libbases.c
+
+clean:
+	-$(RM) \#?.o
+	-$(RM) Seiten
