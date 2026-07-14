@@ -1,13 +1,7 @@
 # Seiten
 
 This is **Seiten**, a Bluesky / AT Protocol client for Amiga — a native ReAction
-application with a thin CLI, built on [amiatp.library](https://github.com/amigazen/amiatp/)
-(which uses [amihttp.library](https://github.com/amigazen/amihttp/) for HTTPS).
-
-Unlike AWeb, Seiten is a **net new** amigazen project: there is no classic Amiga
-Bluesky client being revived.  The name *Seiten* nods to Zen Buddhist *satori*
-(insight / awakening) — a quiet companion to the amigazen haiku — while remaining
-a practical Amiga word for a face of the timeline.
+application, built on [amiatp.library](https://github.com/amigazen/amiatp/)
 
 ## [amigazen project](http://www.amigazen.com)
 
@@ -31,23 +25,15 @@ PRs for all projects are gratefully received at [GitHub](https://github.com/amig
 
 ## About Seiten
 
-Seiten is a **native Bluesky client** for classic AmigaOS 3.2 and AmigaOS 4.1.
-It does not embed a web browser: AT Protocol XRPC, JWT session handling, and
-Lexicon helpers live in `amiatp.library`; Seiten owns the engine, prefs, and UI.
+Seiten is a **native Bluesky client** for classic Amiga.
 
-**v0.2** (current) defaults to a ReAction GUI with Aeronaut-style chrome.  Pass
-CLI command flags to use the same engine from the shell.  Protocol regression
-belongs in **AtpTest** (`amiatp` `SDK/Examples`), not in Seiten itself.
-
-Use a Bluesky **app password**, not your account password.
+Seiten means 'clear sky'.
 
 ## Requirements
 
-- AmigaOS 3.2+ (or 4.1)
-- `amiatp.library` on `LIBS:`
-- `amihttp.library` (+ AmiSSL or AmiTLS) on `LIBS:` — opened by amiatp
-- ReAction (`lib:reaction.lib` at link time; class libraries on `LIBS:`)
-- `PROGDIR:cacert.pem` (or `CAFILE=`) for HTTPS when using AmiTLS
+- Classic Amiga 3.x with ReAction
+- `amiatp.library` in `LIBS:`
+- `amihttp.library` (+ AmiSSL or AmiTLS) in `LIBS:`
 
 ## Features (v0.2)
 
@@ -62,7 +48,6 @@ Use a Bluesky **app password**, not your account password.
 | Timeline chrome | ✅ | Zebra pens, horizontal separators, wrap (no AutoFit) |
 | Like / repost Lexicon | ❌ | Speedbar stubs until amiatp wires records |
 | Mentions / Feeds / Search | ❌ | Sidebar placeholders |
-| Session save to ENVARC | ❌ | Planned for v0.3 |
 | ARexx | ❌ | Later |
 
 ### GUI (default)
@@ -84,63 +69,6 @@ Seiten RESOLVE HANDLE=amigazen.bsky.social CAFILE=PROGDIR:cacert.pem VERBOSE
 Seiten LOGIN HANDLE=... PASSWORD=... POST TEXT="Hello from Amiga" VERBOSE
 ```
 
-### Protocol tests
-
-Use **AtpTest** in the amiatp `SDK/Examples` tree for library regression — not Seiten.
-
-## Architecture
-
-| Piece | Role |
-|-------|------|
-| `engine.c` | Owns `AtpConnection`; shared by CLI and GUI |
-| `gui_*.c` | `window.class`, listbrowser timeline, login / compose / speedbars |
-| `utf8fold.c` | UTF-8 → Latin-1 display fold |
-| `imgload.c` | Thumbnail download + BOOPSI bitmap images |
-| `cli.c` | ReadArgs; default path opens the GUI |
-| amiatp.library | XRPC, JWT session, Lexicon helpers |
-| amihttp.library | HTTP/1.1 + TLS (opened inside amiatp) |
-
-## Build
-
-On Amiga with SAS/C against the ToolKit standard:
-
-```
-cd Source/seiten
-smake
-```
-
-### Prerequisites / dependencies
-
-- SAS/C
-- NDK 3.2 / ReAction headers and link libraries
-- Built and installed `amiatp.library` (and its amihttp / TLS stack on `LIBS:`)
-
-See [ROADMAP.md](ROADMAP.md) for v0.3 and later plans.
-
-## Roadmap (summary)
-
-### v0.1
-
-- Engine + CLI: LOGIN, LOGOUT, WHOAMI, TIMELINE, PROFILE, POST, RESOLVE
-
-### v0.2 (current)
-
-- ReAction GUI with Aeronaut-style chrome
-- Infinite scroll, zebra rows, embed/avatar thumbs
-- Select post → Reply / Star / Repost from the top speedbar (Lexicon like/repost incomplete)
-
-### v0.3
-
-- Optional save/load of refresh token under `ENVARC:Seiten/`
-- Multi-image gallery / full-size viewer
-- Author feed view
-
-### Later
-
-- Notifications
-- ARexx port
-- Full Lexicon reply / like / repost via amiatp
-
 ## Contact
 
 - At GitHub https://github.com/amigazen/seiten/
@@ -150,5 +78,3 @@ See [ROADMAP.md](ROADMAP.md) for v0.3 and later plans.
 ## Acknowledgements
 
 *Amiga* is a trademark of **Amiga Inc**.
-
-Bluesky and the AT Protocol are trademarks of their respective owners; Seiten is an independent client and is not affiliated with Bluesky Social PBC.
