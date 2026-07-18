@@ -53,10 +53,19 @@ ULONG rtbMethodHitTest(struct ClassBase *cb, Class *cl, Object *o,
                    struct rtbHitTest *msg);
 
 void  rtbOpenDefaultFont(struct ClassBase *cb, struct localData *ld);
+struct TextFont *rtbFontForSize(struct ClassBase *cb, struct localData *ld,
+                               UWORD size);
+struct TextFont *rtbResolveFont(struct ClassBase *cb, struct localData *ld,
+                                CONST_STRPTR name, UWORD size);
+void  rtbEnsureSysImages(struct ClassBase *cb, struct localData *ld,
+                         struct DrawInfo *dri);
+void  rtbDisposeSysImages(struct ClassBase *cb, struct localData *ld);
 void  rtbEnsureDoc(struct ClassBase *cb, struct localData *ld);
 void  rtbClearDocContents(struct ClassBase *cb, struct localData *ld);
 void  rtbFreeOwnedDoc(struct ClassBase *cb, struct localData *ld);
 struct RtbBlock *rtbFindBlock(struct localData *ld, RTB_BlockID id);
+struct RtbRun *rtbFindRun(struct localData *ld, RTB_RunID id);
+void  rtbSelectBlockId(struct localData *ld, RTB_BlockID id);
 void  rtbMarkLayoutDirty(struct localData *ld);
 /* doNotify: NEVER TRUE when called from GM_RENDER (OM_NOTIFY during paint locks up). */
 void  rtbRelayout(struct ClassBase *cb, Class *cl, Object *o,

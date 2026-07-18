@@ -21,6 +21,7 @@
 #include <intuition/classusr.h>
 #include <intuition/gadgetclass.h>
 #include <intuition/cghooks.h>
+#include <intuition/imageclass.h>
 #include <graphics/gfx.h>
 #include <graphics/rastport.h>
 #include <graphics/view.h>
@@ -103,6 +104,7 @@ struct ClassBase
 
 #include "rtb_debug.h"
 #include "glyphengine.h"
+#include "rtb_face.h"
 #include "classdata.h"
 #include "class_iprotos.h"
 

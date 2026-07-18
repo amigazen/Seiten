@@ -19,10 +19,23 @@ rtb_line_height(struct localData *ld)
 }
 
 static WORD
+rtb_line_height_size(struct ClassBase *cb, struct localData *ld, UWORD size)
+{
+    struct RtbFace *f;
+
+    if (size < 1)
+        return rtb_line_height(ld);
+    f = rtbFaceResolve(cb, ld, NULL, size, 0);
+    if (f != NULL)
+        return rtbFaceLineHeight(f);
+    return rtb_line_height(ld);
+}
+
+static WORD
 rtb_char_width(struct localData *ld)
 {
     if (ld->ld_Font != NULL && ld->ld_Font->tf_XSize > 0)
-        return ld->ld_Font->tf_XSize;
+        return (WORD)ld->ld_Font->tf_XSize;
     return 8;
 }
 
@@ -52,9 +65,31 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
     {
         CONST_STRPTR text;
         ULONG len;
+        UWORD runSize;
 
         if (++guard > 10000UL)
             break;
+
+        runSize = run->rr_Size;
+        if (runSize < 1 && blk->rb_Type == RTBB_HEADING)
+            runSize = 11;
+        if (runSize > 0 || run->rr_FontName != NULL)
+        {
+            UWORD sz;
+            struct RtbFace *f;
+
+            sz = runSize;
+            if (sz < 1)
+                sz = 8;
+            f = rtbFaceResolve(cb, ld, run->rr_FontName, sz, run->rr_Style);
+            if (f != NULL)
+            {
+                lineH = rtbFaceLineHeight(f);
+                cw = rtbFaceAvgWidth(f);
+            }
+            else
+                lineH = rtb_line_height_size(cb, ld, sz);
+        }
 
         if (run->rr_Kind == RTBR_IMAGE)
         {
@@ -85,11 +120,35 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
         if (run->rr_Kind == RTBR_CONTROL)
         {
             WORD ctlw;
+            WORD labelW;
 
-            ctlw = 48;
+            labelW = 0;
             if (run->rr_Data.control.label != NULL)
-                ctlw = (WORD)(strlen((char *)run->rr_Data.control.label) *
-                    cw + 16);
+                labelW = (WORD)(strlen((char *)run->rr_Data.control.label) *
+                    cw);
+            if (run->rr_Data.control.ctlKind == RTBC_CHECKBOX)
+            {
+                WORD iw;
+                WORD ih;
+
+                iw = 26;
+                ih = 11;
+                if (ld->ld_CheckImg != NULL)
+                {
+                    struct Image *im;
+
+                    im = (struct Image *)ld->ld_CheckImg;
+                    iw = im->Width;
+                    ih = im->Height;
+                }
+                ctlw = (WORD)(iw + 8 + labelW);
+                if (ih + 4 > lineH)
+                    lineH = (WORD)(ih + 4);
+            }
+            else
+                ctlw = (WORD)(labelW + 16);
+            if (ctlw < 48)
+                ctlw = 48;
             if (x > 0 && x + ctlw > colW)
             {
                 y += lineH;
@@ -98,7 +157,7 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
             run->rr_X = x;
             run->rr_Y = (WORD)y;
             run->rr_W = ctlw;
-            run->rr_H = lineH;
+            run->rr_H = (WORD)(lineH + 6);
             x = (WORD)(x + ctlw + 4);
             continue;
         }
@@ -126,38 +185,42 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
             continue;
         }
 
-        /* Cell-width estimate; soft-wrap long runs without TextExtent. */
+        /*
+         * Cell-width walk: soft-wrap at colW, hard-break on CR/LF
+         * (Seiten folds handle\\nbody into one run).
+         */
         {
-            WORD tw;
+            ULONG i;
+            LONG startY;
+            WORD cx;
 
-            tw = (WORD)(len * cw);
-            if (x > 0 && x + tw > colW)
+            startY = y;
+            cx = x;
+            for (i = 0; i < len; i++)
             {
-                y += lineH;
-                x = 0;
-                run->rr_X = 0;
-                run->rr_Y = (WORD)y;
-            }
-            if (tw > colW && colW > cw)
-            {
-                ULONG lines;
+                UBYTE ch;
 
-                lines = (ULONG)((tw + colW - 1) / colW);
-                if (lines < 1)
-                    lines = 1;
-                if (lines > 64)
-                    lines = 64;
-                run->rr_W = colW;
-                run->rr_H = (WORD)(lines * lineH);
-                y += (LONG)(lines * lineH);
-                x = 0;
+                ch = (UBYTE)text[i];
+                if (ch == (UBYTE)'\n' || ch == (UBYTE)'\r')
+                {
+                    y += lineH;
+                    cx = 0;
+                    continue;
+                }
+                if (cx > 0 && cx + cw > colW)
+                {
+                    y += lineH;
+                    cx = 0;
+                }
+                cx = (WORD)(cx + cw);
             }
-            else
-            {
-                run->rr_W = tw;
+            run->rr_W = (WORD)(colW > run->rr_X ? (colW - run->rr_X) : colW);
+            if (run->rr_W < cw)
+                run->rr_W = cw;
+            run->rr_H = (WORD)(y - startY + lineH);
+            if (run->rr_H < lineH)
                 run->rr_H = lineH;
-                x = (WORD)(x + tw);
-            }
+            x = cx;
         }
     }
 
@@ -223,13 +286,37 @@ rtb_measure_block(struct ClassBase *cb, struct localData *ld,
                     run = (struct RtbRun *)run->rr_Node.mln_Succ)
                 {
                     WORD ctlw;
+                    WORD labelW;
 
                     if (++guard > 1000UL)
                         break;
-                    ctlw = 56;
+                    labelW = 0;
                     if (run->rr_Data.control.label != NULL)
-                        ctlw = (WORD)(strlen((char *)
-                            run->rr_Data.control.label) * cw + 16);
+                        labelW = (WORD)(strlen((char *)
+                            run->rr_Data.control.label) * cw);
+                    if (run->rr_Data.control.ctlKind == RTBC_CHECKBOX)
+                    {
+                        WORD iw;
+                        WORD ih;
+
+                        iw = 26;
+                        ih = 11;
+                        if (ld->ld_CheckImg != NULL)
+                        {
+                            struct Image *im;
+
+                            im = (struct Image *)ld->ld_CheckImg;
+                            iw = im->Width;
+                            ih = im->Height;
+                        }
+                        ctlw = (WORD)(iw + 8 + labelW);
+                        if (ih + 4 > lineH)
+                            lineH = (WORD)(ih + 4);
+                    }
+                    else
+                        ctlw = (WORD)(labelW + 16);
+                    if (ctlw < 48)
+                        ctlw = 48;
                     run->rr_X = x;
                     run->rr_Y = 0;
                     run->rr_W = ctlw;

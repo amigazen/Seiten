@@ -163,6 +163,33 @@ rtbFreeOwnedDoc(struct ClassBase *cb, struct localData *ld)
     ld->ld_DocOwned = FALSE;
 }
 
+static struct RtbBlock *rtb_find_block_in(struct RtbBlock *blk, RTB_BlockID id);
+static void rtb_assign_ids(struct RtbDocument *doc, struct RtbBlock *blk);
+
+static struct RtbBlock *
+rtb_find_block_in(struct RtbBlock *blk, RTB_BlockID id)
+{
+    struct RtbBlock *ch;
+    struct RtbBlock *found;
+
+    if (blk == NULL || id == 0)
+        return NULL;
+    if (blk->rb_ID == id)
+        return blk;
+    if (blk->rb_Type != RTBB_HBOX && blk->rb_Type != RTBB_VBOX &&
+        blk->rb_Type != RTBB_QUOTE)
+        return NULL;
+    for (ch = (struct RtbBlock *)blk->rb_Data.box.children.mlh_Head;
+        ch->rb_Node.mln_Succ != NULL;
+        ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+    {
+        found = rtb_find_block_in(ch, id);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
 struct RtbBlock *
 rtbFindBlock(struct localData *ld, RTB_BlockID id)
 {
@@ -174,10 +201,163 @@ rtbFindBlock(struct localData *ld, RTB_BlockID id)
         blk->rb_Node.mln_Succ != NULL;
         blk = (struct RtbBlock *)blk->rb_Node.mln_Succ)
     {
-        if (blk->rb_ID == id)
-            return blk;
+        struct RtbBlock *found;
+
+        found = rtb_find_block_in(blk, id);
+        if (found != NULL)
+            return found;
     }
     return NULL;
+}
+
+/* Assign block + run IDs depth-first (nested HBOX/VBOX/QUOTE). */
+static void
+rtb_assign_ids(struct RtbDocument *doc, struct RtbBlock *blk)
+{
+    struct MinList *list;
+    struct RtbRun *r;
+    struct RtbBlock *ch;
+
+    if (doc == NULL || blk == NULL)
+        return;
+
+    if (blk->rb_ID == 0)
+    {
+        blk->rb_ID = doc->rd_NextBlockID++;
+        if (doc->rd_NextBlockID == 0)
+            doc->rd_NextBlockID = 1;
+    }
+
+    list = NULL;
+    if (blk->rb_Type == RTBB_PARAGRAPH || blk->rb_Type == RTBB_HEADING)
+        list = &blk->rb_Data.flow.runs;
+    else if (blk->rb_Type == RTBB_CONTROLROW)
+        list = &blk->rb_Data.controlrow.controls;
+    if (list != NULL)
+    {
+        for (r = (struct RtbRun *)list->mlh_Head;
+            r->rr_Node.mln_Succ != NULL;
+            r = (struct RtbRun *)r->rr_Node.mln_Succ)
+        {
+            if (r->rr_ID == 0)
+            {
+                r->rr_ID = doc->rd_NextRunID++;
+                if (doc->rd_NextRunID == 0)
+                    doc->rd_NextRunID = 1;
+            }
+        }
+    }
+
+    if (blk->rb_Type == RTBB_HBOX || blk->rb_Type == RTBB_VBOX ||
+        blk->rb_Type == RTBB_QUOTE)
+    {
+        for (ch = (struct RtbBlock *)blk->rb_Data.box.children.mlh_Head;
+            ch->rb_Node.mln_Succ != NULL;
+            ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+        {
+            rtb_assign_ids(doc, ch);
+        }
+    }
+}
+
+static struct RtbRun *
+rtb_find_run_in(struct RtbBlock *blk, RTB_RunID id)
+{
+    struct MinList *list;
+    struct RtbRun *r;
+    struct RtbBlock *ch;
+
+    if (blk == NULL || id == 0)
+        return NULL;
+
+    list = NULL;
+    if (blk->rb_Type == RTBB_PARAGRAPH || blk->rb_Type == RTBB_HEADING)
+        list = &blk->rb_Data.flow.runs;
+    else if (blk->rb_Type == RTBB_CONTROLROW)
+        list = &blk->rb_Data.controlrow.controls;
+    if (list != NULL)
+    {
+        for (r = (struct RtbRun *)list->mlh_Head;
+            r->rr_Node.mln_Succ != NULL;
+            r = (struct RtbRun *)r->rr_Node.mln_Succ)
+        {
+            if (r->rr_ID == id)
+                return r;
+        }
+    }
+
+    if (blk->rb_Type == RTBB_HBOX || blk->rb_Type == RTBB_VBOX ||
+        blk->rb_Type == RTBB_QUOTE)
+    {
+        for (ch = (struct RtbBlock *)blk->rb_Data.box.children.mlh_Head;
+            ch->rb_Node.mln_Succ != NULL;
+            ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+        {
+            r = rtb_find_run_in(ch, id);
+            if (r != NULL)
+                return r;
+        }
+    }
+    return NULL;
+}
+
+struct RtbRun *
+rtbFindRun(struct localData *ld, RTB_RunID id)
+{
+    struct RtbBlock *blk;
+
+    if (ld == NULL || ld->ld_Doc == NULL || id == 0)
+        return NULL;
+    for (blk = (struct RtbBlock *)ld->ld_Doc->rd_Blocks.mlh_Head;
+        blk->rb_Node.mln_Succ != NULL;
+        blk = (struct RtbBlock *)blk->rb_Node.mln_Succ)
+    {
+        struct RtbRun *r;
+
+        r = rtb_find_run_in(blk, id);
+        if (r != NULL)
+            return r;
+    }
+    return NULL;
+}
+
+static void
+rtb_clear_selected(struct RtbBlock *blk)
+{
+    struct RtbBlock *ch;
+
+    if (blk == NULL)
+        return;
+    blk->rb_Flags &= ~RTBBF_SELECTED;
+    if (blk->rb_Type == RTBB_HBOX || blk->rb_Type == RTBB_VBOX ||
+        blk->rb_Type == RTBB_QUOTE)
+    {
+        for (ch = (struct RtbBlock *)blk->rb_Data.box.children.mlh_Head;
+            ch->rb_Node.mln_Succ != NULL;
+            ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+        {
+            rtb_clear_selected(ch);
+        }
+    }
+}
+
+void
+rtbSelectBlockId(struct localData *ld, RTB_BlockID id)
+{
+    struct RtbBlock *blk;
+    struct RtbBlock *found;
+
+    if (ld == NULL || ld->ld_Doc == NULL)
+        return;
+    for (blk = (struct RtbBlock *)ld->ld_Doc->rd_Blocks.mlh_Head;
+        blk->rb_Node.mln_Succ != NULL;
+        blk = (struct RtbBlock *)blk->rb_Node.mln_Succ)
+    {
+        rtb_clear_selected(blk);
+    }
+    found = rtbFindBlock(ld, id);
+    if (found != NULL)
+        found->rb_Flags |= RTBBF_SELECTED;
 }
 
 void
@@ -289,6 +469,8 @@ rtbMethodClear(struct ClassBase *cb, Class *cl, Object *o,
     ld = INST_DATA(cl, o);
     rtbEnsureDoc(cb, ld);
     rtbClearDocContents(cb, ld);
+    ld->ld_FontsWarmed = FALSE;
+    rtbFaceFlushAll(cb, ld);
     rtbRelayout(cb, cl, o, msg->GInfo, TRUE);
     return 1;
 }
@@ -337,6 +519,7 @@ rtbMethodInsertBlock(struct ClassBase *cb, Class *cl, Object *o,
         if (ld->ld_Doc->rd_NextBlockID == 0)
             ld->ld_Doc->rd_NextBlockID = 1;
     }
+    rtb_assign_ids(ld->ld_Doc, msg->Block);
 
     if (msg->AfterID == (RTB_BlockID)~0UL)
     {
@@ -420,7 +603,8 @@ rtbMethodUpdateBlock(struct ClassBase *cb, Class *cl, Object *o,
 {
     struct localData *ld;
     struct RtbBlock *old;
-    struct Node *pred;
+    struct MinNode *pred;
+    struct MinNode *succ;
 
     ld = INST_DATA(cl, o);
     if (msg->Block == NULL || msg->Block->rb_ID == 0)
@@ -428,11 +612,21 @@ rtbMethodUpdateBlock(struct ClassBase *cb, Class *cl, Object *o,
     old = rtbFindBlock(ld, msg->Block->rb_ID);
     if (old == NULL)
         return 0;
-    pred = (struct Node *)old->rb_Node.mln_Pred;
+
+    /* Splice in-place so nested HBOX/VBOX children stay in their list. */
+    pred = old->rb_Node.mln_Pred;
+    succ = old->rb_Node.mln_Succ;
     Remove((struct Node *)old);
     rtbFreeBlock(cb, old);
-    Insert((struct List *)&ld->ld_Doc->rd_Blocks,
-        (struct Node *)msg->Block, pred);
+
+    rtb_assign_ids(ld->ld_Doc, msg->Block);
+    msg->Block->rb_Node.mln_Pred = pred;
+    msg->Block->rb_Node.mln_Succ = succ;
+    if (pred != NULL)
+        pred->mln_Succ = &msg->Block->rb_Node;
+    if (succ != NULL)
+        succ->mln_Pred = &msg->Block->rb_Node;
+
     rtbMarkLayoutDirty(ld);
     if (!ld->ld_Busy)
         rtbRelayout(cb, cl, o, msg->GInfo, TRUE);

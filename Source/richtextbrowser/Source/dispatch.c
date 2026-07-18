@@ -139,9 +139,8 @@ initClass(struct ClassBase *cb)
 }
 
 /*
- * Open ROM topaz before any GM_RENDER. Never OpenDiskFont here — DOS I/O
- * under Intuition layer locks (RA_OpenWindow) hard-locks the machine.
- * page/vector keep font work off the SET path; we open once at OM_NEW.
+ * Open ROM topaz as bitmap fallback only. Scalable faces (TTEngine / bullet)
+ * open later via rtbWarmDocumentFonts once the window is ContentOk.
  */
 void
 rtbOpenDefaultFont(struct ClassBase *cb, struct localData *ld)
@@ -159,6 +158,59 @@ rtbOpenDefaultFont(struct ClassBase *cb, struct localData *ld)
     if (cb != NULL && GfxBase != NULL)
         ld->ld_Font = OpenFont(&ta);
     ld->ld_Plot.cp_Font = ld->ld_Font;
+}
+
+struct TextFont *
+rtbFontForSize(struct ClassBase *cb, struct localData *ld, UWORD size)
+{
+    struct RtbFace *face;
+
+    face = rtbFaceResolve(cb, ld, NULL, size, 0);
+    if (face != NULL && face->rf_Bitmap != NULL)
+        return face->rf_Bitmap;
+    return ld != NULL ? ld->ld_Font : NULL;
+}
+
+struct TextFont *
+rtbResolveFont(struct ClassBase *cb, struct localData *ld,
+    CONST_STRPTR name, UWORD size)
+{
+    struct RtbFace *face;
+
+    face = rtbFaceResolve(cb, ld, name, size, 0);
+    if (face != NULL && face->rf_Bitmap != NULL)
+        return face->rf_Bitmap;
+    return ld != NULL ? ld->ld_Font : NULL;
+}
+
+void
+rtbEnsureSysImages(struct ClassBase *cb, struct localData *ld,
+    struct DrawInfo *dri)
+{
+    if (ld == NULL || dri == NULL)
+        return;
+    ld->ld_DrawInfo = dri;
+    if (ld->ld_CheckImg == NULL && cb != NULL)
+    {
+        /* NewObject needs IntuitionBase via cb macro. */
+        ld->ld_CheckImg = NewObject(NULL, "sysiclass",
+            SYSIA_Which, CHECKIMAGE,
+            SYSIA_DrawInfo, dri,
+            TAG_DONE);
+    }
+}
+
+void
+rtbDisposeSysImages(struct ClassBase *cb, struct localData *ld)
+{
+    if (ld == NULL)
+        return;
+    if (ld->ld_CheckImg != NULL && cb != NULL)
+    {
+        DisposeObject(ld->ld_CheckImg);
+        ld->ld_CheckImg = NULL;
+    }
+    ld->ld_DrawInfo = NULL;
 }
 
 static Object *
@@ -187,6 +239,7 @@ newRtb(struct ClassBase *cb, Class *cl, Object *o, struct opSet *ops)
     ld->ld_QuoteBarPen = 2;
     ld->ld_ShinePen = 2;
     ld->ld_ShadowPen = 1;
+    ld->ld_FillPen = 3;
     ld->ld_LayoutDirty = TRUE;
     ld->ld_CacheDirty = TRUE;
     ld->ld_ContentOk = FALSE;
@@ -206,6 +259,7 @@ newRtb(struct ClassBase *cb, Class *cl, Object *o, struct opSet *ops)
         ld->ld_ShadowPen = dri->dri_Pens[SHADOWPEN];
         ld->ld_LinkPen = dri->dri_Pens[FILLPEN];
         ld->ld_QuoteBarPen = dri->dri_Pens[SHADOWPEN];
+        ld->ld_FillPen = dri->dri_Pens[FILLPEN];
     }
 
     setRtbAttrs(cb, cl, newObj, ops);
@@ -225,12 +279,15 @@ disposeRtb(struct ClassBase *cb, Class *cl, Object *o, Msg msg)
     CP_Done(&ld->ld_Plot);
     CP_BulletClose(cb);
     rtbFreeCache(cb, ld);
+    rtbFaceFlushAll(cb, ld);
+    rtbFreeMeasureRP(cb, ld);
 
     if (ld->ld_Font != NULL)
     {
         CloseFont(ld->ld_Font);
         ld->ld_Font = NULL;
     }
+    rtbDisposeSysImages(cb, ld);
 
     rtbFreeOwnedDoc(cb, ld);
 
@@ -344,12 +401,16 @@ rtbRender(struct ClassBase *cb, Class *cl, Object *o, struct gpRender *msg)
             ld->ld_TextPen = msg->gpr_GInfo->gi_DrInfo->dri_Pens[TEXTPEN];
             ld->ld_ShinePen = msg->gpr_GInfo->gi_DrInfo->dri_Pens[SHINEPEN];
             ld->ld_ShadowPen = msg->gpr_GInfo->gi_DrInfo->dri_Pens[SHADOWPEN];
+            ld->ld_FillPen = msg->gpr_GInfo->gi_DrInfo->dri_Pens[FILLPEN];
         }
     }
 
     if (ld->ld_Font == NULL)
         rtbOpenDefaultFont(cb, ld);
     ld->ld_Plot.cp_Font = ld->ld_Font;
+
+    if (msg->gpr_GInfo != NULL && msg->gpr_GInfo->gi_DrInfo != NULL)
+        rtbEnsureSysImages(cb, ld, msg->gpr_GInfo->gi_DrInfo);
 
     /*
      * Cheap / deferred paint:
@@ -520,30 +581,34 @@ rtbHandleInput(struct ClassBase *cb, Class *cl, Object *o,
                 else if (hit.HitKind == RTBH_IMAGE)
                     ld->ld_RelEvent = RTBE_IMAGEACTIVATE;
                 else if (hit.HitKind == RTBH_CONTROL)
+                {
+                    struct RtbRun *r;
+
                     ld->ld_RelEvent = RTBE_CONTROLACTIVATE;
+                    /* Toggle hosted checkboxes in-place (nested rows OK). */
+                    if (hit.RunID != 0)
+                    {
+                        r = rtbFindRun(ld, hit.RunID);
+                        if (r != NULL && r->rr_Kind == RTBR_CONTROL &&
+                            r->rr_Data.control.ctlKind == RTBC_CHECKBOX)
+                        {
+                            r->rr_Style ^= RTBS_CHECKED;
+                            ld->ld_CacheDirty = TRUE;
+                        }
+                    }
+                }
                 else
                     ld->ld_RelEvent = RTBE_BLOCKSELECT;
 
-                if (ld->ld_SelectBlocks)
+                if (ld->ld_SelectBlocks || ld->ld_CacheDirty)
                 {
-                    struct RtbBlock *b;
-
-                    /* Clear previous selection flags */
-                    if (ld->ld_Doc != NULL)
+                    if (ld->ld_SelectBlocks)
                     {
-                        for (b = (struct RtbBlock *)
-                                ld->ld_Doc->rd_Blocks.mlh_Head;
-                            b->rb_Node.mln_Succ != NULL;
-                            b = (struct RtbBlock *)b->rb_Node.mln_Succ)
-                        {
-                            b->rb_Flags &= ~RTBBF_SELECTED;
-                            if (b->rb_ID == hit.BlockID)
-                                b->rb_Flags |= RTBBF_SELECTED;
-                        }
+                        rtbSelectBlockId(ld, hit.BlockID);
+                        ld->ld_SelectedBlock = hit.BlockID;
+                        ld->ld_SelectedUser = hit.User;
+                        ld->ld_CacheDirty = TRUE;
                     }
-                    ld->ld_SelectedBlock = hit.BlockID;
-                    ld->ld_SelectedUser = hit.User;
-                    ld->ld_CacheDirty = TRUE;
                     rtbRedrawGIRPort(cb, cl, o, msg->gpi_GInfo);
                 }
 

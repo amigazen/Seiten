@@ -21,13 +21,14 @@ LDFLAGS           = ADDSYM SC SD MAP $(MODNAME).map HLSXF PLAIN SWIDTH 16
 LDFLAGS_STRIP     = ND
 
 C_SOURCES         = classbase.c dispatch.c attrs.c pool.c doc.c rtballoc.c \
-                    layout.c render.c hit.c cache.c \
+                    layout.c render.c hit.c cache.c rtb_face.c \
                     canvasplot.c cp_font.c cp_ttfont.c glyphengine.c
 ASM_SOURCES       = classinit.asm endcode.asm
 
 OBJECTS           = classinit.o classbase.o dispatch.o attrs.o pool.o \
                     doc.o rtballoc.o layout.o render.o hit.o cache.o \
-                    canvasplot.o cp_font.o cp_ttfont.o glyphengine.o endcode.o
+                    rtb_face.o canvasplot.o cp_font.o cp_ttfont.o \
+                    glyphengine.o endcode.o
 
 LIBS              = LIB:amiga.lib LIB:scm.lib LIB:sc.lib
 
@@ -58,6 +59,7 @@ layout.o:       layout.c classbase.h classdata.h class_iprotos.h
 render.o:       render.c classbase.h classdata.h class_iprotos.h
 hit.o:          hit.c classbase.h classdata.h class_iprotos.h
 cache.o:        cache.c classbase.h classdata.h class_iprotos.h
+rtb_face.o:     rtb_face.c rtb_face.h classbase.h glyphengine.h
 canvasplot.o:   canvasplot.c classbase.h
 cp_font.o:      cp_font.c classbase.h glyphengine.h
 cp_ttfont.o:    cp_ttfont.c classbase.h

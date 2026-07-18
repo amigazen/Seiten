@@ -129,6 +129,8 @@ alloc_block(struct ClassBase *cb, UWORD type)
     if (blk == NULL)
         return NULL;
     blk->rb_Type = type;
+    blk->rb_Fg = (ULONG)~0;
+    blk->rb_Bg = (ULONG)~0;
     switch (type)
     {
         case RTBB_PARAGRAPH:
@@ -214,6 +216,20 @@ apply_run_tags(struct ClassBase *cb, struct RtbRun *run, struct TagItem *tags)
             case RTBA_BgPen:
                 run->rr_Bg = tag->ti_Data;
                 break;
+            case RTBA_Size:
+                run->rr_Size = (UWORD)tag->ti_Data;
+                break;
+            case RTBA_FontName:
+                if (run->rr_FontName != NULL)
+                    FreeVec(run->rr_FontName);
+                run->rr_FontName = dup_str(cb, (CONST_STRPTR)tag->ti_Data);
+                break;
+            case RTBA_Checked:
+                if (tag->ti_Data)
+                    run->rr_Style |= RTBS_CHECKED;
+                else
+                    run->rr_Style &= ~RTBS_CHECKED;
+                break;
             case RTBA_Text:
                 s = dup_str(cb, (CONST_STRPTR)tag->ti_Data);
                 if (run->rr_Kind == RTBR_LINK)
@@ -294,6 +310,12 @@ apply_block_tags(struct ClassBase *cb, struct RtbBlock *blk,
                 break;
             case RTBA_User:
                 blk->rb_User = (APTR)tag->ti_Data;
+                break;
+            case RTBA_FgPen:
+                blk->rb_Fg = tag->ti_Data;
+                break;
+            case RTBA_BgPen:
+                blk->rb_Bg = tag->ti_Data;
                 break;
             case RTBA_BitMapObject:
                 blk->rb_Data.image.bitmapObj = (Object *)tag->ti_Data;

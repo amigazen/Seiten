@@ -2,18 +2,22 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright 2026 amigazen project
  *
- * rtbtest.c - richtextbrowser.gadget stress harness with step logging
+ * rtbtest.c - richtextbrowser.gadget Bluesky-flavoured feed harness
  *
- * Covers: OpenLibrary, document builders (heading/quote/rule/link/control/
- * long wrap), window open, ICA scroller map, live scroll, hit-test, dispose.
+ * Exercises: zebra RTBA_BgPen, heading size, BitMap blit, placeholder
+ * thumbs, hosted Like/Repost buttons, checkbox toggle, links, quote,
+ * live scroller, hit RelEvent.
  */
 
 #include <exec/types.h>
 #include <exec/libraries.h>
+#include <exec/memory.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/intuition.h>
+#include <proto/graphics.h>
 #include <intuition/gadgetclass.h>
+#include <graphics/gfx.h>
 #include <proto/alib.h>
 
 #include <proto/window.h>
@@ -33,6 +37,9 @@
 #include <string.h>
 
 struct Library *RichTextBrowserBase;
+
+/* Sample avatar thumb — freed after the window closes. */
+static struct BitMap *g_ThumbBM;
 
 static void
 log_msg(CONST_STRPTR s)
@@ -121,8 +128,186 @@ insert_block(Object *rtb, struct RtbBlock *blk)
     return TRUE;
 }
 
+/*
+ * Checkerboard 48x48 BitMap for the first post avatar.
+ * Later posts use a placeholder (no BitMap) so both paint paths run.
+ */
+static struct BitMap *
+make_thumb_bm(void)
+{
+    struct BitMap *bm;
+    struct RastPort rp;
+    WORD x;
+    WORD y;
+
+    bm = AllocBitMap(48, 48, 1, BMF_CLEAR, NULL);
+    if (bm == NULL)
+        return NULL;
+    InitRastPort(&rp);
+    rp.BitMap = bm;
+    SetAPen(&rp, 1);
+    for (y = 0; y < 48; y++)
+    {
+        for (x = 0; x < 48; x++)
+        {
+            if (((x / 6) ^ (y / 6)) & 1)
+                WritePixel(&rp, x, y);
+        }
+    }
+    Move(&rp, 0, 0);
+    Draw(&rp, 47, 0);
+    Draw(&rp, 47, 47);
+    Draw(&rp, 0, 47);
+    Draw(&rp, 0, 0);
+    return bm;
+}
+
+/* One feed row: HBOX(avatar | VBOX(text, actions)) with zebra bg. */
 static BOOL
-insert_sample_doc(Object *rtb, LONG nParagraphs)
+insert_feed_post(Object *rtb, LONG i, struct BitMap *thumb)
+{
+    ULONG bg;
+    UBYTE handle[48];
+    UBYTE body[160];
+    struct RtbBlock *hbox;
+    struct RtbBlock *vbox;
+    struct RtbBlock *img;
+    struct RtbBlock *para;
+    struct RtbBlock *ctl;
+    struct RtbRun *run;
+
+    /* Pen 0 = even row; pen 3 = odd fill (DrawInfo FILLPEN-ish). */
+    bg = ((i & 1) == 0) ? 0UL : 3UL;
+
+    sprintf((char *)handle, "@amiga.user%ld.bsky.social", (long)i);
+    sprintf((char *)body,
+        "Post %ld: Amiga-flavoured Bluesky row. Zebra bg, "
+        "hosted Like/Repost, checkbox notify. Wrap words "
+        "words words so soft layout and clip stay honest.",
+        (long)i);
+
+    hbox = AllocRtbBlockTags(RTBB_HBOX, RTBA_BgPen, bg, TAG_DONE);
+    if (hbox == NULL)
+        return FALSE;
+
+    if (thumb != NULL && i == 0)
+    {
+        img = AllocRtbBlockTags(RTBB_IMAGE,
+            RTBA_Width, 48,
+            RTBA_Height, 48,
+            RTBA_BgPen, bg,
+            RTBA_BitMap, (ULONG)thumb,
+            RTBA_Alt, (ULONG)"avatar",
+            TAG_DONE);
+    }
+    else
+    {
+        img = AllocRtbBlockTags(RTBB_IMAGE,
+            RTBA_Width, 48,
+            RTBA_Height, 48,
+            RTBA_BgPen, bg,
+            RTBA_Alt, (ULONG)"avatar",
+            TAG_DONE);
+    }
+    if (img == NULL)
+    {
+        FreeRtbBlock(hbox);
+        return FALSE;
+    }
+
+    vbox = AllocRtbBlockTags(RTBB_VBOX, RTBA_BgPen, bg, TAG_DONE);
+    para = AllocRtbBlockTags(RTBB_PARAGRAPH, RTBA_BgPen, bg, TAG_DONE);
+    if (vbox == NULL || para == NULL)
+    {
+        if (vbox != NULL)
+            FreeRtbBlock(vbox);
+        if (para != NULL)
+            FreeRtbBlock(para);
+        FreeRtbBlock(img);
+        FreeRtbBlock(hbox);
+        return FALSE;
+    }
+
+    run = AllocRtbRunTags(RTBR_TEXT,
+        RTBA_Text, (ULONG)handle,
+        RTBA_Style, RTBS_BOLD,
+        RTBA_FontName, (ULONG)"Arial",
+        RTBA_Size, 13,
+        TAG_DONE);
+    if (run != NULL)
+        RtbBlockAddRun(para, run);
+
+    run = AllocRtbRunTags(RTBR_TEXT,
+        RTBA_Text, (ULONG)"  ·  2h\n",
+        RTBA_FontName, (ULONG)"Times New Roman",
+        RTBA_Size, 10,
+        TAG_DONE);
+    if (run != NULL)
+        RtbBlockAddRun(para, run);
+
+    run = AllocRtbRunTags(RTBR_TEXT,
+        RTBA_Text, (ULONG)body,
+        RTBA_FontName, (ULONG)"Times New Roman",
+        RTBA_Size, 12,
+        TAG_DONE);
+    if (run != NULL)
+        RtbBlockAddRun(para, run);
+
+    if ((i % 4) == 1)
+    {
+        run = AllocRtbRunTags(RTBR_TEXT,
+            RTBA_Text, (ULONG)"  See ",
+            TAG_DONE);
+        if (run != NULL)
+            RtbBlockAddRun(para, run);
+        run = AllocRtbRunTags(RTBR_LINK,
+            RTBA_Text, (ULONG)"bsky.app",
+            RTBA_Href, (ULONG)"https://bsky.app/",
+            RTBA_User, (ULONG)(0xBEEF0000UL + (ULONG)i),
+            TAG_DONE);
+        if (run != NULL)
+            RtbBlockAddRun(para, run);
+    }
+
+    ctl = AllocRtbBlockTags(RTBB_CONTROLROW, RTBA_BgPen, bg, TAG_DONE);
+    if (ctl != NULL)
+    {
+        run = AllocRtbRunTags(RTBR_CONTROL,
+            RTBA_CtlKind, RTBC_BUTTON,
+            RTBA_Label, (ULONG)"Like",
+            RTBA_User, (ULONG)(0xCAFE0000UL + (ULONG)i),
+            TAG_DONE);
+        if (run != NULL)
+            RtbBlockAddRun(ctl, run);
+        run = AllocRtbRunTags(RTBR_CONTROL,
+            RTBA_CtlKind, RTBC_BUTTON,
+            RTBA_Label, (ULONG)"Repost",
+            RTBA_User, (ULONG)(0xC0DE0000UL + (ULONG)i),
+            TAG_DONE);
+        if (run != NULL)
+            RtbBlockAddRun(ctl, run);
+        run = AllocRtbRunTags(RTBR_CONTROL,
+            RTBA_CtlKind, RTBC_CHECKBOX,
+            RTBA_Label, (ULONG)"Notify",
+            RTBA_Checked, (i & 1) ? TRUE : FALSE,
+            RTBA_User, (ULONG)(0xFACE0000UL + (ULONG)i),
+            TAG_DONE);
+        if (run != NULL)
+            RtbBlockAddRun(ctl, run);
+    }
+
+    RtbBlockAddChild(vbox, para);
+    if (ctl != NULL)
+        RtbBlockAddChild(vbox, ctl);
+    RtbBlockAddChild(hbox, img);
+    RtbBlockAddChild(hbox, vbox);
+    insert_block(rtb, hbox);
+    insert_block(rtb, AllocRtbBlockTags(RTBB_RULE, TAG_DONE));
+    return TRUE;
+}
+
+static BOOL
+insert_sample_doc(Object *rtb, LONG nPosts)
 {
     struct RtbBlock *blk;
     struct RtbRun *run;
@@ -131,35 +316,37 @@ insert_sample_doc(Object *rtb, LONG nParagraphs)
     log_msg("rtbtest: SetAttrs RTB_Busy TRUE\n");
     SetAttrs(rtb, RTB_Busy, TRUE, TAG_DONE);
 
-    /* Heading */
     blk = AllocRtbBlockTags(RTBB_HEADING, TAG_DONE);
     if (blk != NULL)
     {
+        /* TTEngine family (maps to Arial); bullet CGTriumvirate if no TTF. */
         run = AllocRtbRunTags(RTBR_TEXT,
-            RTBA_Text, (ULONG)"richtextbrowser harness",
+            RTBA_Text, (ULONG)"Seiten feed · richtextbrowser",
+            RTBA_FontName, (ULONG)"Arial",
+            RTBA_Size, 18,
+            RTBA_Style, RTBS_BOLD,
             TAG_DONE);
         if (run != NULL)
             RtbBlockAddRun(blk, run);
         insert_block(rtb, blk);
     }
 
-    /* Long wrapping paragraph */
     blk = AllocRtbBlockTags(RTBB_PARAGRAPH, TAG_DONE);
     if (blk != NULL)
     {
         run = AllocRtbRunTags(RTBR_TEXT,
             RTBA_Text, (ULONG)
-            "Long wrap: the viewport must clip Text that would otherwise "
-            "spill into the status bar or scroller while the document is "
-            "scrolled. Alphabet pack: abcdefghijklmnopqrstuvwxyz 0123456789 "
-            "repeated words words words words words words words words end.",
+            "Harness: TTEngine/bullet scalable faces, sysiclass CHECKIMAGE, "
+            "zebra rows, BitMap thumbs, scroll. Bitmap fonts are fallback only.",
+            RTBA_FontName, (ULONG)"Times New Roman",
+            RTBA_Size, 12,
             TAG_DONE);
         if (run != NULL)
             RtbBlockAddRun(blk, run);
         insert_block(rtb, blk);
     }
 
-    /* Quote with nested paragraph */
+    /* Quoted reply sample */
     blk = AllocRtbBlockTags(RTBB_QUOTE, TAG_DONE);
     if (blk != NULL)
     {
@@ -169,7 +356,10 @@ insert_sample_doc(Object *rtb, LONG nParagraphs)
         if (child != NULL)
         {
             run = AllocRtbRunTags(RTBR_TEXT,
-                RTBA_Text, (ULONG)"Quoted block - bar should stay clipped.",
+                RTBA_Text, (ULONG)
+                "Quoted skeet (bullet CGTimes.otag when TTEngine absent).",
+                RTBA_FontName, (ULONG)"FONTS:CGTimes.otag",
+                RTBA_Size, 14,
                 TAG_DONE);
             if (run != NULL)
                 RtbBlockAddRun(child, run);
@@ -179,86 +369,21 @@ insert_sample_doc(Object *rtb, LONG nParagraphs)
         insert_block(rtb, blk);
     }
 
-    insert_block(rtb, AllocRtbBlockTags(RTBB_RULE, TAG_DONE));
     insert_block(rtb, AllocRtbBlockTags(RTBB_SPACER,
-        RTBA_Pixels, 12, TAG_DONE));
+        RTBA_Pixels, 8, TAG_DONE));
 
-    for (i = 0; i < nParagraphs; i++)
+    g_ThumbBM = make_thumb_bm();
+    if (g_ThumbBM == NULL)
+        log_msg("rtbtest: WARN AllocBitMap thumb failed (placeholders only)\n");
+
+    for (i = 0; i < nPosts; i++)
     {
-        UBYTE buf[120];
-
-        sprintf((char *)buf,
-            "Para %ld: scroll/clip harness line with enough wrap words "
-            "to exercise soft layout metrics and hit testing.",
-            (long)i);
-
         if ((i & 7) == 0)
             log_fmt("rtbtest: insert progress i=%lu\n", (ULONG)i, 0, 0);
-
-        blk = AllocRtbBlockTags(RTBB_PARAGRAPH, TAG_DONE);
-        if (blk == NULL)
+        if (!insert_feed_post(rtb, i, g_ThumbBM))
         {
             SetAttrs(rtb, RTB_Busy, FALSE, TAG_DONE);
             return FALSE;
-        }
-        run = AllocRtbRunTags(RTBR_TEXT, RTBA_Text, (ULONG)buf, TAG_DONE);
-        if (run == NULL || !RtbBlockAddRun(blk, run))
-        {
-            if (run != NULL)
-                FreeRtbRun(run);
-            FreeRtbBlock(blk);
-            SetAttrs(rtb, RTB_Busy, FALSE, TAG_DONE);
-            return FALSE;
-        }
-        insert_block(rtb, blk);
-
-        if ((i % 5) == 4)
-        {
-            blk = AllocRtbBlockTags(RTBB_PARAGRAPH, TAG_DONE);
-            if (blk != NULL)
-            {
-                run = AllocRtbRunTags(RTBR_TEXT,
-                    RTBA_Text, (ULONG)"See also: ", TAG_DONE);
-                if (run != NULL)
-                    RtbBlockAddRun(blk, run);
-                run = AllocRtbRunTags(RTBR_LINK,
-                    RTBA_Text, (ULONG)"example.com",
-                    RTBA_Href, (ULONG)"https://example.com/",
-                    RTBA_User, (ULONG)(0xBEEF0000UL + (ULONG)i),
-                    TAG_DONE);
-                if (run != NULL)
-                    RtbBlockAddRun(blk, run);
-                insert_block(rtb, blk);
-            }
-        }
-
-        if ((i % 6) == 5)
-            insert_block(rtb, AllocRtbBlockTags(RTBB_RULE, TAG_DONE));
-
-        if ((i % 10) == 9)
-        {
-            struct RtbBlock *ctl;
-            struct RtbRun *btn;
-
-            ctl = AllocRtbBlock(RTBB_CONTROLROW);
-            if (ctl != NULL)
-            {
-                btn = AllocRtbRunTags(RTBR_CONTROL,
-                    RTBA_CtlKind, RTBC_BUTTON,
-                    RTBA_Label, (ULONG)"Like",
-                    RTBA_User, (ULONG)(0xCAFE0000UL + (ULONG)i),
-                    TAG_DONE);
-                if (btn != NULL)
-                    RtbBlockAddRun(ctl, btn);
-                btn = AllocRtbRunTags(RTBR_CONTROL,
-                    RTBA_CtlKind, RTBC_BUTTON,
-                    RTBA_Label, (ULONG)"Repost",
-                    RTBA_User, (ULONG)(0xC0DE0000UL + (ULONG)i),
-                    TAG_DONE);
-                if (btn != NULL)
-                    RtbBlockAddRun(ctl, btn);
-                insert_block(rtb, ctl);
-            }
         }
     }
 
@@ -290,7 +415,7 @@ main(void)
     BOOL running;
     LONG n;
 
-    log_msg("rtbtest: start (v9 clip + live scroller)\n");
+    log_msg("rtbtest: start (v12 TTEngine + bullet scalable)\n");
 
     RichTextBrowserBase = OpenLibrary("gadgets/richtextbrowser.gadget", 0);
     if (RichTextBrowserBase == NULL)
@@ -328,11 +453,13 @@ main(void)
     }
     log_msg("rtbtest: NewObject OK\n");
 
-    n = 40;
-    log_fmt("rtbtest: building sample doc paragraphs=%lu\n", (ULONG)n, 0, 0);
+    n = 24;
+    log_fmt("rtbtest: building feed posts=%lu\n", (ULONG)n, 0, 0);
     if (!insert_sample_doc(rtb, n))
     {
         DisposeObject(rtb);
+        if (g_ThumbBM != NULL)
+            FreeBitMap(g_ThumbBM);
         CloseLibrary(RichTextBrowserBase);
         return RETURN_FAIL;
     }
@@ -350,7 +477,7 @@ main(void)
     status = ButtonObject,
         GA_ID, 3,
         GA_ReadOnly, TRUE,
-        GA_Text, "rtbtest: scroll / click links / controls",
+        GA_Text, "scroll · click Like/Notify/links · zebra + thumb",
     ButtonEnd;
 
     layout = VLayoutObject,
@@ -367,14 +494,14 @@ main(void)
     LayoutEnd;
 
     winobj = WindowObject,
-        WA_Title, "richtextbrowser rtbtest",
+        WA_Title, "richtextbrowser · Seiten feed",
         WA_DragBar, TRUE,
         WA_CloseGadget, TRUE,
         WA_DepthGadget, TRUE,
         WA_SizeGadget, TRUE,
         WA_Activate, TRUE,
-        WA_InnerWidth, 420,
-        WA_InnerHeight, 280,
+        WA_InnerWidth, 440,
+        WA_InnerHeight, 300,
         WA_IDCMP, IDCMP_INTUITICKS,
         WINDOW_Position, WPOS_CENTERSCREEN,
         WINDOW_ParentGroup, layout,
@@ -384,6 +511,8 @@ main(void)
     {
         log_msg("rtbtest: FAIL WindowObject\n");
         DisposeObject(rtb);
+        if (g_ThumbBM != NULL)
+            FreeBitMap(g_ThumbBM);
         CloseLibrary(RichTextBrowserBase);
         return RETURN_FAIL;
     }
@@ -394,6 +523,8 @@ main(void)
     {
         log_msg("rtbtest: FAIL RA_OpenWindow\n");
         DisposeObject(winobj);
+        if (g_ThumbBM != NULL)
+            FreeBitMap(g_ThumbBM);
         CloseLibrary(RichTextBrowserBase);
         return RETURN_FAIL;
     }
@@ -422,7 +553,7 @@ main(void)
             ht.HitKind, ht.BlockID, ht.RunID);
     }
 
-    log_msg("rtbtest: event loop (scroll should track live; Ctrl-C/close)\n");
+    log_msg("rtbtest: event loop (Notify toggles; Ctrl-C/close)\n");
     GetAttr(WINDOW_SigMask, winobj, &signal);
     running = TRUE;
     while (running)
@@ -474,6 +605,12 @@ main(void)
     log_msg("rtbtest: close / dispose\n");
     RA_CloseWindow(winobj);
     DisposeObject(winobj);
+    /* Document held the BitMap pointer; free after gadget dispose. */
+    if (g_ThumbBM != NULL)
+    {
+        FreeBitMap(g_ThumbBM);
+        g_ThumbBM = NULL;
+    }
     CloseLibrary(RichTextBrowserBase);
     log_msg("rtbtest: done OK\n");
     return RETURN_OK;

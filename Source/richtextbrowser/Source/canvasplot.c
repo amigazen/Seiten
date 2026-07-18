@@ -11,11 +11,9 @@
 
 #include "classbase.h"
 
-#ifdef TTENGINE_AVAILABLE
 #include <libraries/ttengine.h>
 #include <clib/ttengine_protos.h>
 #include <pragma/ttengine_lib.h>
-#endif
 
 void
 CP_Init(struct CanvasPlot *cp, struct ClassBase *cb)
@@ -360,8 +358,25 @@ CP_DrawText(struct CanvasPlot *cp, WORD x, WORD y,
     {
         SetDrMd(cp->cp_RP, JAM1);
     }
+    /* SoftStyle for bold/italic on bitmap fonts (Amiga-native look). */
+    {
+        ULONG soft;
+        ULONG avail;
+
+        soft = FS_NORMAL;
+        if (style != NULL)
+        {
+            if (style->Style & RTBS_BOLD)
+                soft |= FSF_BOLD;
+            if (style->Style & RTBS_ITALIC)
+                soft |= FSF_ITALIC;
+        }
+        avail = AskSoftStyle(cp->cp_RP);
+        SetSoftStyle(cp->cp_RP, soft, avail);
+    }
     Move(cp->cp_RP, x, y);
     Text(cp->cp_RP, (STRPTR)text, len);
+    SetSoftStyle(cp->cp_RP, FS_NORMAL, AskSoftStyle(cp->cp_RP));
 
     /* Underline via cell width — never TextExtent on a Layer RP. */
     if (style != NULL && (style->Style & RTBS_UNDERLINE) && cp->cp_Font != NULL)
@@ -414,7 +429,6 @@ CP_BeginTT(struct CanvasPlot *cp)
     if (cb == NULL || cb->cb_TTEngineBase == NULL)
         return FALSE;
 
-#ifdef TTENGINE_AVAILABLE
     if (cp->cp_Window != NULL)
     {
         TT_SetAttrs(cp->cp_RP,
@@ -424,9 +438,6 @@ CP_BeginTT(struct CanvasPlot *cp)
         cp->cp_TTActive = TRUE;
         return TRUE;
     }
-#else
-    (void)cb;
-#endif
     return FALSE;
 }
 
@@ -438,11 +449,7 @@ CP_EndTT(struct CanvasPlot *cp)
     if (cp == NULL || !cp->cp_TTActive)
         return;
     cb = cp->cp_CB;
-#ifdef TTENGINE_AVAILABLE
     if (cp->cp_RP != NULL && cb != NULL && TTEngineBase != NULL)
         TT_DoneRastPort(cp->cp_RP);
-#else
-    (void)cb;
-#endif
     cp->cp_TTActive = FALSE;
 }

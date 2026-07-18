@@ -8,6 +8,10 @@
 #ifndef RTB_CLASSDATA_H
 #define RTB_CLASSDATA_H
 
+#ifndef RTB_FACE_H
+#include "rtb_face.h"
+#endif
+
 struct localData
 {
     APTR                    ld_Pool;
@@ -47,9 +51,22 @@ struct localData
     WORD                    ld_TextPen;
     WORD                    ld_ShinePen;
     WORD                    ld_ShadowPen;
+    WORD                    ld_FillPen;     /* selected / button face */
 
     struct TextAttr         *ld_TextAttr;
     struct TextFont         *ld_Font;
+
+    /* Scalable face cache (TTEngine → bullet → bitmap). */
+    struct RtbFace          ld_Faces[RTB_FACE_SLOTS];
+    struct RastPort         ld_MeasureRP;
+    struct BitMap           ld_MeasureBM;
+    PLANEPTR                ld_MeasurePlane;
+    BOOL                    ld_MeasureOk;
+    BOOL                    ld_FontsWarmed;
+
+    /* sysiclass chrome (GadTools-native CHECKIMAGE) */
+    Object                 *ld_CheckImg;
+    struct DrawInfo        *ld_DrawInfo;    /* non-owning; from GInfo */
 
     /* Gadget domain (after GM_LAYOUT), window-relative */
     WORD                    ld_Left;

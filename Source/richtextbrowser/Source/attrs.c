@@ -224,13 +224,24 @@ setRtbAttrs(struct ClassBase *cb, Class *cl, Object *o, struct opSet *msg)
     ld->ld_InSet = FALSE;
 
     /*
-     * TickBox: after OM_SET returns its nested cheap paint, ObtainGIRPort
-     * + GM_RENDER while InSet is FALSE. Avoids RefreshGList from the app
-     * (also layer-locked) for the first content paint.
+     * After OpenWindow SetGadgetAttrs: open disk fonts (safe now), remasure,
+     * then TickBox ObtainGIRPort paint. Never OpenDiskFont inside RENDER.
      */
     if (msg->ops_GInfo != NULL && ld->ld_ContentOk && !ld->ld_Busy &&
         !ld->ld_InRender)
+    {
+        if (msg->ops_GInfo->gi_DrInfo != NULL)
+            rtbEnsureSysImages(cb, ld, msg->ops_GInfo->gi_DrInfo);
+        if (!ld->ld_FontsWarmed)
+        {
+            rtbWarmDocumentFonts(cb, ld);
+            ld->ld_FontsWarmed = TRUE;
+            rtbMarkLayoutDirty(ld);
+        }
+        if (ld->ld_LayoutDirty)
+            rtbRelayout(cb, cl, o, msg->ops_GInfo, FALSE);
         rtbRedrawGIRPort(cb, cl, o, msg->ops_GInfo);
+    }
 
     return 1;
 }

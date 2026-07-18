@@ -55,16 +55,17 @@ CP_BulletIsOpen(void)
 }
 
 BOOL
-CP_DrawBulletText(struct ClassBase *cb, struct CanvasPlot *cp,
-    WORD x, WORD y, CONST_STRPTR text, ULONG len, WORD fgPen)
+CP_DrawBulletTextFace(struct ClassBase *cb, struct CanvasPlot *cp,
+    struct GlyphRenderCtx *ctx, WORD x, WORD y, CONST_STRPTR text, ULONG len,
+    WORD fgPen)
 {
     ULONG i;
     LONG penX;
     LONG adv;
     ULONG code;
 
-    if (!s_DefaultFace.bf_Open || cp == NULL || cp->cp_RP == NULL ||
-        text == NULL)
+    if (ctx == NULL || ctx->grc_Engine == NULL || cp == NULL ||
+        cp->cp_RP == NULL || text == NULL)
         return FALSE;
     if (len == 0)
     {
@@ -80,12 +81,10 @@ CP_DrawBulletText(struct ClassBase *cb, struct CanvasPlot *cp,
     {
         code = (ULONG)(UBYTE)text[i];
         adv = 0;
-        /* Identity rotation: sin=0 cos=1.0 in 16.16 */
-        if (!gleDrawGlyph(cb, &s_DefaultFace.bf_Ctx, cp->cp_RP, code,
+        if (!gleDrawGlyph(cb, ctx, cp->cp_RP, code,
                 penX, (LONG)y, 0, 0x10000L, &adv))
         {
-            /* Missing glyph — advance by em estimate */
-            adv = s_DefaultFace.bf_Ctx.grc_EmWidth / 2;
+            adv = ctx->grc_EmWidth / 2;
             if (adv < 1)
                 adv = 1;
         }
@@ -95,7 +94,8 @@ CP_DrawBulletText(struct ClassBase *cb, struct CanvasPlot *cp,
 }
 
 WORD
-CP_BulletTextWidth(struct ClassBase *cb, CONST_STRPTR text, ULONG len)
+CP_BulletTextWidthFace(struct ClassBase *cb, struct GlyphRenderCtx *ctx,
+    CONST_STRPTR text, ULONG len, WORD avgWidth)
 {
     ULONG i;
     LONG penX;
@@ -104,20 +104,19 @@ CP_BulletTextWidth(struct ClassBase *cb, CONST_STRPTR text, ULONG len)
     struct RastPort rp;
     struct BitMap bm;
 
-    if (!s_DefaultFace.bf_Open || text == NULL)
-        return 0;
+    if (ctx == NULL || ctx->grc_Engine == NULL || text == NULL)
+        return (WORD)(len * (avgWidth > 0 ? avgWidth : 8));
     if (len == 0)
     {
         while (text[len] != '\0')
             len++;
     }
 
-    /* Measure without visible blit: use a tiny CHIP bitmap RP */
     memset(&bm, 0, sizeof(bm));
     InitBitMap(&bm, 1, 8, 8);
     bm.Planes[0] = (PLANEPTR)AllocMem(8, MEMF_CHIP | MEMF_CLEAR);
     if (bm.Planes[0] == NULL)
-        return (WORD)(len * (s_DefaultFace.bf_PointSize / 2 + 1));
+        return (WORD)(len * (avgWidth > 0 ? avgWidth : 8));
 
     InitRastPort(&rp);
     rp.BitMap = &bm;
@@ -127,10 +126,9 @@ CP_BulletTextWidth(struct ClassBase *cb, CONST_STRPTR text, ULONG len)
     {
         code = (ULONG)(UBYTE)text[i];
         adv = 0;
-        if (!gleDrawGlyph(cb, &s_DefaultFace.bf_Ctx, &rp, code,
-                0, 8, 0, 0x10000L, &adv))
+        if (!gleDrawGlyph(cb, ctx, &rp, code, 0, 8, 0, 0x10000L, &adv))
         {
-            adv = s_DefaultFace.bf_Ctx.grc_EmWidth / 2;
+            adv = ctx->grc_EmWidth / 2;
             if (adv < 1)
                 adv = 1;
         }
@@ -140,4 +138,23 @@ CP_BulletTextWidth(struct ClassBase *cb, CONST_STRPTR text, ULONG len)
     FreeMem(bm.Planes[0], 8);
     (void)cb;
     return (WORD)penX;
+}
+
+BOOL
+CP_DrawBulletText(struct ClassBase *cb, struct CanvasPlot *cp,
+    WORD x, WORD y, CONST_STRPTR text, ULONG len, WORD fgPen)
+{
+    if (!s_DefaultFace.bf_Open)
+        return FALSE;
+    return CP_DrawBulletTextFace(cb, cp, &s_DefaultFace.bf_Ctx,
+        x, y, text, len, fgPen);
+}
+
+WORD
+CP_BulletTextWidth(struct ClassBase *cb, CONST_STRPTR text, ULONG len)
+{
+    if (!s_DefaultFace.bf_Open)
+        return 0;
+    return CP_BulletTextWidthFace(cb, &s_DefaultFace.bf_Ctx, text, len,
+        (WORD)(s_DefaultFace.bf_PointSize / 2 + 1));
 }
