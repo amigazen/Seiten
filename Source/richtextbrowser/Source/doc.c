@@ -94,12 +94,25 @@ rtbFreeBlock(struct ClassBase *cb, struct RtbBlock *blk)
         case RTBB_QUOTE:
             rtbFreeBlockList(cb, &blk->rb_Data.box.children);
             break;
+        case RTBB_IMAGEGRID:
+            rtbFreeBlockList(cb, &blk->rb_Data.grid.children);
+            break;
         case RTBB_CONTROLROW:
             rtbFreeRunList(cb, &blk->rb_Data.controlrow.controls);
             break;
         case RTBB_IMAGE:
             if (blk->rb_Data.image.alt != NULL)
                 FreeVec(blk->rb_Data.image.alt);
+            break;
+        case RTBB_EMBED:
+            if (blk->rb_Data.embed.title != NULL)
+                FreeVec(blk->rb_Data.embed.title);
+            if (blk->rb_Data.embed.description != NULL)
+                FreeVec(blk->rb_Data.embed.description);
+            if (blk->rb_Data.embed.site != NULL)
+                FreeVec(blk->rb_Data.embed.site);
+            if (blk->rb_Data.embed.href != NULL)
+                FreeVec(blk->rb_Data.embed.href);
             break;
         default:
             break;
@@ -177,8 +190,20 @@ rtb_find_block_in(struct RtbBlock *blk, RTB_BlockID id)
     if (blk->rb_ID == id)
         return blk;
     if (blk->rb_Type != RTBB_HBOX && blk->rb_Type != RTBB_VBOX &&
-        blk->rb_Type != RTBB_QUOTE)
+        blk->rb_Type != RTBB_QUOTE && blk->rb_Type != RTBB_IMAGEGRID)
         return NULL;
+    if (blk->rb_Type == RTBB_IMAGEGRID)
+    {
+        for (ch = (struct RtbBlock *)blk->rb_Data.grid.children.mlh_Head;
+            ch->rb_Node.mln_Succ != NULL;
+            ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+        {
+            found = rtb_find_block_in(ch, id);
+            if (found != NULL)
+                return found;
+        }
+        return NULL;
+    }
     for (ch = (struct RtbBlock *)blk->rb_Data.box.children.mlh_Head;
         ch->rb_Node.mln_Succ != NULL;
         ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
@@ -258,6 +283,15 @@ rtb_assign_ids(struct RtbDocument *doc, struct RtbBlock *blk)
             rtb_assign_ids(doc, ch);
         }
     }
+    else if (blk->rb_Type == RTBB_IMAGEGRID)
+    {
+        for (ch = (struct RtbBlock *)blk->rb_Data.grid.children.mlh_Head;
+            ch->rb_Node.mln_Succ != NULL;
+            ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+        {
+            rtb_assign_ids(doc, ch);
+        }
+    }
 }
 
 static struct RtbRun *
@@ -290,6 +324,17 @@ rtb_find_run_in(struct RtbBlock *blk, RTB_RunID id)
         blk->rb_Type == RTBB_QUOTE)
     {
         for (ch = (struct RtbBlock *)blk->rb_Data.box.children.mlh_Head;
+            ch->rb_Node.mln_Succ != NULL;
+            ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+        {
+            r = rtb_find_run_in(ch, id);
+            if (r != NULL)
+                return r;
+        }
+    }
+    else if (blk->rb_Type == RTBB_IMAGEGRID)
+    {
+        for (ch = (struct RtbBlock *)blk->rb_Data.grid.children.mlh_Head;
             ch->rb_Node.mln_Succ != NULL;
             ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
         {
@@ -333,6 +378,15 @@ rtb_clear_selected(struct RtbBlock *blk)
         blk->rb_Type == RTBB_QUOTE)
     {
         for (ch = (struct RtbBlock *)blk->rb_Data.box.children.mlh_Head;
+            ch->rb_Node.mln_Succ != NULL;
+            ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+        {
+            rtb_clear_selected(ch);
+        }
+    }
+    else if (blk->rb_Type == RTBB_IMAGEGRID)
+    {
+        for (ch = (struct RtbBlock *)blk->rb_Data.grid.children.mlh_Head;
             ch->rb_Node.mln_Succ != NULL;
             ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
         {
@@ -685,4 +739,43 @@ rtbMethodHitTest(struct ClassBase *cb, Class *cl, Object *o,
     if (rtbHitAt(cb, ld, gx, gy, msg))
         return 1;
     return 0;
+}
+
+/*
+ * Return document-space Y/height for lazy CDN: prefer the top-level ancestor
+ * so nested avatar/media IDs still map to the feed row's visible band.
+ */
+ULONG
+rtbMethodBlockBounds(struct ClassBase *cb, Class *cl, Object *o,
+    struct rtbBlockBounds *msg)
+{
+    struct localData *ld;
+    struct RtbBlock *top;
+    struct RtbBlock *blk;
+    struct RtbBlock *found;
+
+    (void)cb;
+    ld = INST_DATA(cl, o);
+    msg->OutY = 0;
+    msg->OutHeight = 0;
+    if (msg->BlockID == 0 || ld->ld_Doc == NULL)
+        return 0;
+
+    found = NULL;
+    for (top = (struct RtbBlock *)ld->ld_Doc->rd_Blocks.mlh_Head;
+        top->rb_Node.mln_Succ != NULL;
+        top = (struct RtbBlock *)top->rb_Node.mln_Succ)
+    {
+        blk = rtb_find_block_in(top, msg->BlockID);
+        if (blk != NULL)
+        {
+            found = top; /* top-level row bounds */
+            break;
+        }
+    }
+    if (found == NULL)
+        return 0;
+    msg->OutY = found->rb_Y;
+    msg->OutHeight = found->rb_Height;
+    return 1;
 }

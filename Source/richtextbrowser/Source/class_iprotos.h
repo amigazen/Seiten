@@ -51,6 +51,8 @@ ULONG rtbMethodScrollTo(struct ClassBase *cb, Class *cl, Object *o,
                    struct rtbScrollTo *msg);
 ULONG rtbMethodHitTest(struct ClassBase *cb, Class *cl, Object *o,
                    struct rtbHitTest *msg);
+ULONG rtbMethodBlockBounds(struct ClassBase *cb, Class *cl, Object *o,
+                   struct rtbBlockBounds *msg);
 
 void  rtbOpenDefaultFont(struct ClassBase *cb, struct localData *ld);
 struct TextFont *rtbFontForSize(struct ClassBase *cb, struct localData *ld,

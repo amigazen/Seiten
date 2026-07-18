@@ -10,6 +10,21 @@
 
 #include "classbase.h"
 #include <images/bitmap.h>
+#include <datatypes/datatypesclass.h>
+#include <datatypes/pictureclass.h>
+
+struct RtbPaintWrap
+{
+    struct ClassBase   *pw_CB;
+    struct localData   *pw_LD;
+    struct RtbFace     *pw_Face;
+    WORD                pw_OriginX;
+    WORD                pw_OriginY;
+    WORD                pw_Baseline;
+    WORD                pw_Fg;
+    WORD                pw_Bg;
+    ULONG               pw_Style;
+};
 
 static void
 rtb_fill_block_bg(struct localData *ld, struct RtbBlock *blk,
@@ -32,23 +47,42 @@ rtb_fill_block_bg(struct localData *ld, struct RtbBlock *blk,
 }
 
 static void
+rtb_paint_wrap_emit(APTR ud, WORD x, WORD y, CONST_STRPTR text, ULONG len,
+    WORD pixelW)
+{
+    struct RtbPaintWrap *pw;
+    WORD ax;
+    WORD ay;
+
+    pw = (struct RtbPaintWrap *)ud;
+    if (pw == NULL || text == NULL || len < 1)
+        return;
+    ax = (WORD)(pw->pw_OriginX + x);
+    ay = (WORD)(pw->pw_OriginY + y + pw->pw_Baseline);
+    rtbFaceDraw(pw->pw_CB, pw->pw_LD, pw->pw_Face, &pw->pw_LD->ld_Plot,
+        ax, ay, text, len, pw->pw_Fg, pw->pw_Bg, pw->pw_Style);
+    if (pw->pw_Style & RTBS_UNDERLINE)
+    {
+        CP_SetPens(&pw->pw_LD->ld_Plot, pw->pw_Fg, 0);
+        CP_Line(&pw->pw_LD->ld_Plot, ax, (WORD)(ay + 1),
+            (WORD)(ax + pixelW), (WORD)(ay + 1));
+    }
+}
+
+static void
 rtb_paint_run_text(struct ClassBase *cb, struct localData *ld,
-    struct RtbRun *run, WORD originX, WORD originY, WORD colW,
+    struct RtbRun *run, WORD blockX, WORD blockY, WORD colW,
     BOOL isLink)
 {
     CONST_STRPTR text;
     ULONG len;
     struct RtbFace *face;
     WORD lineH;
-    WORD cw;
-    WORD x;
-    WORD y;
     WORD fg;
     WORD bg;
     UWORD size;
-    ULONG pos;
-    ULONG chunk;
     ULONG style;
+    struct RtbPaintWrap pw;
 
     text = NULL;
     len = 0;
@@ -82,7 +116,6 @@ rtb_paint_run_text(struct ClassBase *cb, struct localData *ld,
         return;
 
     lineH = rtbFaceLineHeight(face);
-    cw = rtbFaceAvgWidth(face);
 
     if (bg >= 0)
     {
@@ -92,94 +125,31 @@ rtb_paint_run_text(struct ClassBase *cb, struct localData *ld,
         if (tw > colW && colW > 0)
             tw = colW;
         CP_SetPens(&ld->ld_Plot, bg, 0);
-        CP_FillRect(&ld->ld_Plot, originX, originY,
-            (WORD)(originX + tw - 1),
-            (WORD)(originY + lineH - 1));
+        CP_FillRect(&ld->ld_Plot,
+            (WORD)(blockX + run->rr_X), (WORD)(blockY + run->rr_Y),
+            (WORD)(blockX + run->rr_X + tw - 1),
+            (WORD)(blockY + run->rr_Y + lineH - 1));
     }
 
-    /*
-     * Scalable draw via TTEngine / bullet (bitmap Text only as fallback).
-     * Honour CR/LF hard breaks (Seiten handle\\nbody).
-     */
-    x = originX;
-    y = (WORD)(originY + (face->rf_Baseline > 0 ? face->rf_Baseline :
-        (lineH - 3)));
-    pos = 0;
-    chunk = 40;
-    if (colW > cw && cw > 0)
-        chunk = (ULONG)(colW / cw);
-    if (chunk < 1)
-        chunk = 1;
-    if (chunk > 80)
-        chunk = 80;
-
-    while (pos < len)
-    {
-        ULONG n;
-        ULONG j;
-        UBYTE ch;
-
-        ch = (UBYTE)text[pos];
-        if (ch == (UBYTE)'\n' || ch == (UBYTE)'\r')
-        {
-            y = (WORD)(y + lineH);
-            x = originX;
-            pos++;
-            continue;
-        }
-
-        if (x > originX && x + cw > originX + colW && colW > 0)
-        {
-            y = (WORD)(y + lineH);
-            x = originX;
-        }
-
-        n = 0;
-        j = pos;
-        while (j < len && n < chunk)
-        {
-            ch = (UBYTE)text[j];
-            if (ch == (UBYTE)'\n' || ch == (UBYTE)'\r')
-                break;
-            if (n > 0 && x + (WORD)((n + 1) * cw) > originX + colW &&
-                colW > cw)
-                break;
-            n++;
-            j++;
-        }
-        if (n < 1)
-            n = 1;
-        rtbFaceDraw(cb, ld, face, &ld->ld_Plot, x, y, text + pos, n,
-            fg, bg, style);
-        if (style & RTBS_UNDERLINE)
-        {
-            WORD uw;
-
-            uw = (WORD)(n * cw);
-            CP_SetPens(&ld->ld_Plot, fg, 0);
-            CP_Line(&ld->ld_Plot, x, (WORD)(y + 1),
-                (WORD)(x + uw), (WORD)(y + 1));
-        }
-        pos += n;
-        x = (WORD)(x + (WORD)(n * cw));
-        if (pos < len && x + cw > originX + colW && colW > cw)
-        {
-            UBYTE peek;
-
-            peek = (UBYTE)text[pos];
-            if (peek != (UBYTE)'\n' && peek != (UBYTE)'\r')
-            {
-                y = (WORD)(y + lineH);
-                x = originX;
-            }
-        }
-    }
+    /* Same wrap as layout: block-relative x, wrap at colW. */
+    pw.pw_CB = cb;
+    pw.pw_LD = ld;
+    pw.pw_Face = face;
+    pw.pw_OriginX = blockX;
+    pw.pw_OriginY = (WORD)(blockY + run->rr_Y);
+    pw.pw_Baseline = (WORD)(face->rf_Baseline > 0 ? face->rf_Baseline :
+        (lineH - 3));
+    pw.pw_Fg = fg;
+    pw.pw_Bg = bg;
+    pw.pw_Style = style;
+    rtbFaceWrapText(cb, ld, face, text, len, colW, run->rr_X,
+        rtb_paint_wrap_emit, &pw, NULL);
 }
 
 static void
 rtb_paint_image_bm(struct ClassBase *cb, struct localData *ld,
     Object *bmObj, struct BitMap *bm, WORD x, WORD y, WORD w, WORD h,
-    WORD bgPen)
+    WORD bgPen, BOOL loadFail)
 {
     struct BitMap *src;
 
@@ -192,14 +162,20 @@ rtb_paint_image_bm(struct ClassBase *cb, struct localData *ld,
     src = bm;
     if (src == NULL && bmObj != NULL)
         GetAttr(BITMAP_BitMap, bmObj, (ULONG *)&src);
+    /* picture.datatype DestBitMap (AWeb imgsource path) */
+    if (src == NULL && bmObj != NULL && DataTypesBase != NULL)
+        GetDTAttrs(bmObj, PDTA_DestBitMap, &src, TAG_END);
     if (src == NULL)
     {
-        /* Amiga-flavoured placeholder thumb */
+        /* Loading: thin frame only. Failed GET: classic broken-image X. */
         CP_SetPens(&ld->ld_Plot, ld->ld_ShadowPen, 0);
         CP_Rect(&ld->ld_Plot, x, y, (WORD)(x + w - 1), (WORD)(y + h - 1));
-        CP_SetPens(&ld->ld_Plot, ld->ld_ShinePen, 0);
-        CP_Line(&ld->ld_Plot, x, y, (WORD)(x + w - 1), (WORD)(y + h - 1));
-        CP_Line(&ld->ld_Plot, (WORD)(x + w - 1), y, x, (WORD)(y + h - 1));
+        if (loadFail)
+        {
+            CP_SetPens(&ld->ld_Plot, ld->ld_ShinePen, 0);
+            CP_Line(&ld->ld_Plot, x, y, (WORD)(x + w - 1), (WORD)(y + h - 1));
+            CP_Line(&ld->ld_Plot, (WORD)(x + w - 1), y, x, (WORD)(y + h - 1));
+        }
         return;
     }
     CP_BltBitMap(&ld->ld_Plot, src, 0, 0, x, y, w, h);
@@ -276,8 +252,53 @@ rtb_paint_control(struct ClassBase *cb, struct localData *ld,
         return;
     }
 
-    /* Button: raised bevel + fill */
-    CP_SetPens(&ld->ld_Plot, ld->ld_FillPen, 0);
+    /* Borderless AISS icon — DrawImage respects BITMAP_Masking (no magenta). */
+    if (run->rr_Data.control.ctlKind == RTBC_ICON)
+    {
+        WORD iw;
+        WORD ih;
+        Object *imgObj;
+        struct Image *img;
+
+        iw = run->rr_Data.control.iw;
+        ih = run->rr_Data.control.ih;
+        if (iw < 1)
+            iw = 16;
+        if (ih < 1)
+            ih = 16;
+        imgObj = run->rr_Data.control.bitmapObj;
+        if (checked && run->rr_Data.control.selBitmapObj != NULL)
+            imgObj = run->rr_Data.control.selBitmapObj;
+        img = (struct Image *)imgObj;
+        if (img != NULL && ld->ld_Plot.cp_RP != NULL && cb != NULL)
+        {
+            DrawImageState(ld->ld_Plot.cp_RP, img, (WORD)(rx + 2),
+                (WORD)(ry + 2),
+                checked ? IDS_SELECTED : IDS_NORMAL,
+                ld->ld_DrawInfo);
+        }
+        else
+        {
+            rtb_paint_image_bm(cb, ld, imgObj, run->rr_Data.control.bm,
+                (WORD)(rx + 2), (WORD)(ry + 2), iw, ih, -1, FALSE);
+        }
+        if (run->rr_Data.control.label != NULL)
+        {
+            memset(&st, 0, sizeof(st));
+            st.FgPen = ld->ld_TextPen;
+            st.BgPen = -1;
+            if (ld->ld_Font != NULL)
+                ld->ld_Plot.cp_Font = ld->ld_Font;
+            CP_DrawText(&ld->ld_Plot, (WORD)(rx + iw + 6),
+                (WORD)(ry + run->rr_H - 4),
+                run->rr_Data.control.label,
+                strlen((char *)run->rr_Data.control.label), &st);
+        }
+        return;
+    }
+
+    /* Button: Amiga raised chrome on background (not FILLPEN flood). */
+    CP_SetPens(&ld->ld_Plot, ld->ld_BgPen, 0);
     CP_FillRect(&ld->ld_Plot, rx, ry, x2, y2);
     CP_SetPens(&ld->ld_Plot, ld->ld_ShinePen, 0);
     CP_Line(&ld->ld_Plot, rx, ry, x2, ry);
@@ -321,21 +342,23 @@ rtb_paint_flow(struct ClassBase *cb, struct localData *ld,
         if (run->rr_Kind == RTBR_IMAGE)
         {
             WORD bg;
+            BOOL fail;
 
             bg = -1;
             if (run->rr_Bg != (ULONG)~0)
                 bg = (WORD)run->rr_Bg;
+            fail = FALSE;
             rtb_paint_image_bm(cb, ld, run->rr_Data.image.bitmapObj,
                 run->rr_Data.image.bm, rx, ry,
                 run->rr_W > 0 ? run->rr_W : 48,
-                run->rr_H > 0 ? run->rr_H : 48, bg);
+                run->rr_H > 0 ? run->rr_H : 48, bg, fail);
         }
         else if (run->rr_Kind == RTBR_CONTROL)
             rtb_paint_control(cb, ld, run, rx, ry);
         else if (run->rr_Kind == RTBR_LINK)
-            rtb_paint_run_text(cb, ld, run, rx, ry, colW, TRUE);
+            rtb_paint_run_text(cb, ld, run, originX, originY, colW, TRUE);
         else if (run->rr_Kind == RTBR_TEXT)
-            rtb_paint_run_text(cb, ld, run, rx, ry, colW, FALSE);
+            rtb_paint_run_text(cb, ld, run, originX, originY, colW, FALSE);
     }
 }
 
@@ -361,7 +384,107 @@ rtb_paint_block(struct ClassBase *cb, struct localData *ld,
             rtb_paint_image_bm(cb, ld, blk->rb_Data.image.bitmapObj,
                 blk->rb_Data.image.bm, originX, originY,
                 blk->rb_Data.image.w ? blk->rb_Data.image.w : 48,
-                blk->rb_Data.image.h ? blk->rb_Data.image.h : 48, imgBg);
+                blk->rb_Data.image.h ? blk->rb_Data.image.h : 48, imgBg,
+                (blk->rb_Flags & RTBBF_LOADFAIL) ? TRUE : FALSE);
+            break;
+
+        case RTBB_IMAGEGRID:
+            {
+                struct RtbBlock *ch;
+
+                for (ch = (struct RtbBlock *)
+                        blk->rb_Data.grid.children.mlh_Head;
+                    ch->rb_Node.mln_Succ != NULL;
+                    ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+                {
+                    WORD cx;
+                    WORD cy;
+                    WORD cw;
+                    WORD chh;
+                    WORD bg;
+
+                    /* Layout stashed cell X in image.maxW */
+                    cx = (WORD)(originX + (WORD)ch->rb_Data.image.maxW);
+                    cy = (WORD)(originY + ch->rb_Y);
+                    cw = ch->rb_Data.image.w ? ch->rb_Data.image.w : 48;
+                    chh = ch->rb_Data.image.h ? ch->rb_Data.image.h : 48;
+                    bg = -1;
+                    if (ch->rb_Bg != (ULONG)~0)
+                        bg = (WORD)ch->rb_Bg;
+                    else if (blk->rb_Bg != (ULONG)~0)
+                        bg = (WORD)blk->rb_Bg;
+                    rtb_paint_image_bm(cb, ld, ch->rb_Data.image.bitmapObj,
+                        ch->rb_Data.image.bm, cx, cy, cw, chh, bg,
+                        (ch->rb_Flags & RTBBF_LOADFAIL) ? TRUE : FALSE);
+                }
+            }
+            break;
+
+        case RTBB_EMBED:
+            {
+                WORD pad;
+                WORD tw;
+                WORD th;
+                WORD tx;
+                WORD ty;
+                WORD textW;
+                struct CP_TextStyle st;
+                WORD x2;
+                WORD y2;
+
+                pad = 4;
+                x2 = (WORD)(originX + colW - 1);
+                y2 = (WORD)(originY + blk->rb_Height - 1);
+                /* Thin container frame — not raised button bevel. */
+                CP_SetPens(&ld->ld_Plot, ld->ld_ShadowPen, 0);
+                CP_Rect(&ld->ld_Plot, originX, originY, x2, y2);
+
+                tw = (WORD)blk->rb_Data.embed.thumbW;
+                th = (WORD)blk->rb_Data.embed.thumbH;
+                tx = (WORD)(originX + pad);
+                ty = (WORD)(originY + pad);
+                if (tw > 0 && th > 0)
+                {
+                    rtb_paint_image_bm(cb, ld,
+                        blk->rb_Data.embed.bitmapObj,
+                        blk->rb_Data.embed.bm, tx, ty, tw, th, -1, FALSE);
+                    tx = (WORD)(tx + tw + 8);
+                }
+                textW = (WORD)(originX + colW - pad - tx);
+                if (textW < 20)
+                    textW = 20;
+                memset(&st, 0, sizeof(st));
+                st.BgPen = -1;
+                if (ld->ld_Font != NULL)
+                    ld->ld_Plot.cp_Font = ld->ld_Font;
+                if (blk->rb_Data.embed.title != NULL)
+                {
+                    st.FgPen = ld->ld_TextPen;
+                    CP_DrawText(&ld->ld_Plot, tx,
+                        (WORD)(ty + (ld->ld_Font ? ld->ld_Font->tf_Baseline : 8)),
+                        blk->rb_Data.embed.title,
+                        strlen((char *)blk->rb_Data.embed.title), &st);
+                    ty = (WORD)(ty + (ld->ld_Font ? ld->ld_Font->tf_YSize : 10) + 2);
+                }
+                if (blk->rb_Data.embed.description != NULL)
+                {
+                    st.FgPen = ld->ld_TextPen;
+                    CP_DrawText(&ld->ld_Plot, tx,
+                        (WORD)(ty + (ld->ld_Font ? ld->ld_Font->tf_Baseline : 8)),
+                        blk->rb_Data.embed.description,
+                        strlen((char *)blk->rb_Data.embed.description), &st);
+                    ty = (WORD)(ty + (ld->ld_Font ? ld->ld_Font->tf_YSize : 10) + 2);
+                }
+                if (blk->rb_Data.embed.site != NULL)
+                {
+                    st.FgPen = ld->ld_LinkPen; /* FILLPEN accent */
+                    CP_DrawText(&ld->ld_Plot, tx,
+                        (WORD)(ty + (ld->ld_Font ? ld->ld_Font->tf_Baseline : 8)),
+                        blk->rb_Data.embed.site,
+                        strlen((char *)blk->rb_Data.embed.site), &st);
+                }
+                (void)textW;
+            }
             break;
 
         case RTBB_RULE:
@@ -418,7 +541,7 @@ rtb_paint_block(struct ClassBase *cb, struct localData *ld,
                         cx = childX;
                         cy = originY;
                         cw = ch->rb_Width > 0 ? ch->rb_Width : colW;
-                        childX = (WORD)(childX + cw + 4);
+                        childX = (WORD)(childX + cw + RTB_HBOX_GAP);
                     }
                     else
                     {

@@ -81,6 +81,48 @@ rtb_hit_block_at(struct RtbBlock *blk, WORD localX, WORD localY,
             out->User = blk->rb_User;
             return TRUE;
 
+        case RTBB_IMAGEGRID:
+            {
+                struct RtbBlock *ch;
+
+                for (ch = (struct RtbBlock *)
+                        blk->rb_Data.grid.children.mlh_Head;
+                    ch->rb_Node.mln_Succ != NULL;
+                    ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+                {
+                    WORD cx;
+                    WORD cy;
+                    WORD cw;
+                    WORD chh;
+
+                    cx = (WORD)ch->rb_Data.image.maxW;
+                    cy = (WORD)ch->rb_Y;
+                    cw = ch->rb_Data.image.w ? ch->rb_Data.image.w : 48;
+                    chh = ch->rb_Data.image.h ? ch->rb_Data.image.h : 48;
+                    if (localX >= cx && localX < cx + cw &&
+                        localY >= cy && localY < cy + chh)
+                    {
+                        out->BlockID = ch->rb_ID;
+                        out->RunID = 0;
+                        out->HitKind = RTBH_IMAGE;
+                        out->User = ch->rb_User != NULL ? ch->rb_User :
+                            blk->rb_User;
+                        return TRUE;
+                    }
+                }
+            }
+            out->BlockID = blk->rb_ID;
+            out->HitKind = RTBH_BLOCK;
+            out->User = blk->rb_User;
+            return TRUE;
+
+        case RTBB_EMBED:
+            out->BlockID = blk->rb_ID;
+            out->RunID = 0;
+            out->HitKind = RTBH_EMBED;
+            out->User = blk->rb_User;
+            return TRUE;
+
         case RTBB_CONTROLROW:
             if (rtb_hit_run_list(&blk->rb_Data.controlrow.controls,
                     localX, localY, out, blk->rb_ID, blk->rb_User))
@@ -140,7 +182,7 @@ rtb_hit_block_at(struct RtbBlock *blk, WORD localX, WORD localY,
                             return TRUE;
                         }
                     }
-                    cx = (WORD)(cx + cw + 4);
+                    cx = (WORD)(cx + cw + RTB_HBOX_GAP);
                 }
             }
             out->BlockID = blk->rb_ID;

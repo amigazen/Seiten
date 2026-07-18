@@ -97,6 +97,8 @@ struct localData
 
 #define RTB_DEFAULT_OVERSCAN   64
 #define RTB_DEFAULT_BLOCKCAP   512
-#define RTB_BEVEL_PAD          2
+#define RTB_BEVEL_PAD          4
+#define RTB_HBOX_GAP           8
+#define RTB_ROW_PAD            6
 
 #endif /* RTB_CLASSDATA_H */

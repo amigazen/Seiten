@@ -53,6 +53,20 @@ void rtbFaceDraw(struct ClassBase *cb, struct localData *ld,
     WORD x, WORD y, CONST_STRPTR text, ULONG len,
     WORD fg, WORD bg, ULONG style);
 
+/*
+ * Word-wrap with rtbFaceTextWidth (TT_TextLength / TextLength / bullet).
+ * Soft-break at spaces; hard-break on CR/LF; overlong words split by glyph.
+ * Coordinates are block-relative: lines wrap to x=0, colW is right edge.
+ * startX is the cursor on the first line. Returns total height; *endXOut
+ * is the cursor after the last glyph (may be 0 after a trailing newline).
+ */
+typedef void (*RtbFaceWrapEmit)(APTR ud, WORD x, WORD y,
+    CONST_STRPTR text, ULONG len, WORD pixelW);
+
+LONG rtbFaceWrapText(struct ClassBase *cb, struct localData *ld,
+    struct RtbFace *face, CONST_STRPTR text, ULONG len,
+    WORD colW, WORD startX, RtbFaceWrapEmit emit, APTR ud, WORD *endXOut);
+
 BOOL rtbMayOpenFonts(struct localData *ld);
 void rtbEnsureMeasureRP(struct ClassBase *cb, struct localData *ld);
 void rtbFreeMeasureRP(struct ClassBase *cb, struct localData *ld);

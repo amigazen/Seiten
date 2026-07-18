@@ -93,12 +93,25 @@ free_block(struct ClassBase *cb, struct RtbBlock *blk)
         case RTBB_QUOTE:
             free_block_list(cb, &blk->rb_Data.box.children);
             break;
+        case RTBB_IMAGEGRID:
+            free_block_list(cb, &blk->rb_Data.grid.children);
+            break;
         case RTBB_CONTROLROW:
             free_run_list(cb, &blk->rb_Data.controlrow.controls);
             break;
         case RTBB_IMAGE:
             if (blk->rb_Data.image.alt != NULL)
                 FreeVec(blk->rb_Data.image.alt);
+            break;
+        case RTBB_EMBED:
+            if (blk->rb_Data.embed.title != NULL)
+                FreeVec(blk->rb_Data.embed.title);
+            if (blk->rb_Data.embed.description != NULL)
+                FreeVec(blk->rb_Data.embed.description);
+            if (blk->rb_Data.embed.site != NULL)
+                FreeVec(blk->rb_Data.embed.site);
+            if (blk->rb_Data.embed.href != NULL)
+                FreeVec(blk->rb_Data.embed.href);
             break;
         default:
             break;
@@ -142,8 +155,16 @@ alloc_block(struct ClassBase *cb, UWORD type)
         case RTBB_QUOTE:
             NewList((struct List *)&blk->rb_Data.box.children);
             break;
+        case RTBB_IMAGEGRID:
+            NewList((struct List *)&blk->rb_Data.grid.children);
+            blk->rb_Data.grid.gap = RTB_HBOX_GAP;
+            break;
         case RTBB_CONTROLROW:
             NewList((struct List *)&blk->rb_Data.controlrow.controls);
+            break;
+        case RTBB_EMBED:
+            blk->rb_Data.embed.thumbW = 64;
+            blk->rb_Data.embed.thumbH = 64;
             break;
         case RTBB_SPACER:
             blk->rb_Data.spacer.pixels = 8;
@@ -261,16 +282,32 @@ apply_run_tags(struct ClassBase *cb, struct RtbRun *run, struct TagItem *tags)
                     run->rr_Data.control.user = (APTR)tag->ti_Data;
                 break;
             case RTBA_BitMapObject:
-                run->rr_Data.image.bitmapObj = (Object *)tag->ti_Data;
+                if (run->rr_Kind == RTBR_CONTROL)
+                    run->rr_Data.control.bitmapObj = (Object *)tag->ti_Data;
+                else
+                    run->rr_Data.image.bitmapObj = (Object *)tag->ti_Data;
+                break;
+            case RTBA_SelBitMapObject:
+                if (run->rr_Kind == RTBR_CONTROL)
+                    run->rr_Data.control.selBitmapObj = (Object *)tag->ti_Data;
                 break;
             case RTBA_BitMap:
-                run->rr_Data.image.bm = (struct BitMap *)tag->ti_Data;
+                if (run->rr_Kind == RTBR_CONTROL)
+                    run->rr_Data.control.bm = (struct BitMap *)tag->ti_Data;
+                else
+                    run->rr_Data.image.bm = (struct BitMap *)tag->ti_Data;
                 break;
             case RTBA_Width:
-                run->rr_Data.image.w = (UWORD)tag->ti_Data;
+                if (run->rr_Kind == RTBR_CONTROL)
+                    run->rr_Data.control.iw = (UWORD)tag->ti_Data;
+                else
+                    run->rr_Data.image.w = (UWORD)tag->ti_Data;
                 break;
             case RTBA_Height:
-                run->rr_Data.image.h = (UWORD)tag->ti_Data;
+                if (run->rr_Kind == RTBR_CONTROL)
+                    run->rr_Data.control.ih = (UWORD)tag->ti_Data;
+                else
+                    run->rr_Data.image.h = (UWORD)tag->ti_Data;
                 break;
             case RTBA_MaxWidth:
                 run->rr_Data.image.maxW = (UWORD)tag->ti_Data;
@@ -318,22 +355,78 @@ apply_block_tags(struct ClassBase *cb, struct RtbBlock *blk,
                 blk->rb_Bg = tag->ti_Data;
                 break;
             case RTBA_BitMapObject:
-                blk->rb_Data.image.bitmapObj = (Object *)tag->ti_Data;
+                if (blk->rb_Type == RTBB_EMBED)
+                    blk->rb_Data.embed.bitmapObj = (Object *)tag->ti_Data;
+                else
+                    blk->rb_Data.image.bitmapObj = (Object *)tag->ti_Data;
                 break;
             case RTBA_BitMap:
-                blk->rb_Data.image.bm = (struct BitMap *)tag->ti_Data;
+                if (blk->rb_Type == RTBB_EMBED)
+                    blk->rb_Data.embed.bm = (struct BitMap *)tag->ti_Data;
+                else
+                    blk->rb_Data.image.bm = (struct BitMap *)tag->ti_Data;
                 break;
             case RTBA_Width:
                 if (blk->rb_Type == RTBB_IMAGE)
                     blk->rb_Data.image.w = (UWORD)tag->ti_Data;
+                else if (blk->rb_Type == RTBB_EMBED)
+                    blk->rb_Data.embed.thumbW = (UWORD)tag->ti_Data;
                 break;
             case RTBA_Height:
                 if (blk->rb_Type == RTBB_IMAGE)
                     blk->rb_Data.image.h = (UWORD)tag->ti_Data;
+                else if (blk->rb_Type == RTBB_EMBED)
+                    blk->rb_Data.embed.thumbH = (UWORD)tag->ti_Data;
                 break;
             case RTBA_MaxWidth:
                 if (blk->rb_Type == RTBB_IMAGE)
                     blk->rb_Data.image.maxW = (UWORD)tag->ti_Data;
+                else if (blk->rb_Type == RTBB_IMAGEGRID)
+                    blk->rb_Data.grid.maxCellH = (UWORD)tag->ti_Data;
+                break;
+            case RTBA_Columns:
+                if (blk->rb_Type == RTBB_IMAGEGRID)
+                    blk->rb_Data.grid.columns = (UWORD)tag->ti_Data;
+                break;
+            case RTBA_Gap:
+                if (blk->rb_Type == RTBB_IMAGEGRID)
+                    blk->rb_Data.grid.gap = (UWORD)tag->ti_Data;
+                break;
+            case RTBA_Title:
+                if (blk->rb_Type == RTBB_EMBED)
+                {
+                    if (blk->rb_Data.embed.title != NULL)
+                        FreeVec(blk->rb_Data.embed.title);
+                    blk->rb_Data.embed.title =
+                        dup_str(cb, (CONST_STRPTR)tag->ti_Data);
+                }
+                break;
+            case RTBA_Description:
+                if (blk->rb_Type == RTBB_EMBED)
+                {
+                    if (blk->rb_Data.embed.description != NULL)
+                        FreeVec(blk->rb_Data.embed.description);
+                    blk->rb_Data.embed.description =
+                        dup_str(cb, (CONST_STRPTR)tag->ti_Data);
+                }
+                break;
+            case RTBA_Site:
+                if (blk->rb_Type == RTBB_EMBED)
+                {
+                    if (blk->rb_Data.embed.site != NULL)
+                        FreeVec(blk->rb_Data.embed.site);
+                    blk->rb_Data.embed.site =
+                        dup_str(cb, (CONST_STRPTR)tag->ti_Data);
+                }
+                break;
+            case RTBA_Href:
+                if (blk->rb_Type == RTBB_EMBED)
+                {
+                    if (blk->rb_Data.embed.href != NULL)
+                        FreeVec(blk->rb_Data.embed.href);
+                    blk->rb_Data.embed.href =
+                        dup_str(cb, (CONST_STRPTR)tag->ti_Data);
+                }
                 break;
             case RTBA_Pixels:
                 blk->rb_Data.spacer.pixels = (UWORD)tag->ti_Data;
@@ -463,6 +556,12 @@ ASM RtbBlockAddChild(REG(a0) struct RtbBlock *parent,
     (void)cb;
     if (parent == NULL || child == NULL)
         return 0;
+    if (parent->rb_Type == RTBB_IMAGEGRID)
+    {
+        AddTail((struct List *)&parent->rb_Data.grid.children,
+            (struct Node *)child);
+        return 1;
+    }
     if (parent->rb_Type != RTBB_HBOX && parent->rb_Type != RTBB_VBOX &&
         parent->rb_Type != RTBB_QUOTE)
         return 0;

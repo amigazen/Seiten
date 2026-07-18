@@ -112,6 +112,11 @@ ASM Dispatch(REG(a0) Class *cl, REG(a2) Object *o, REG(a1) Msg msg)
                 (struct rtbHitTest *)msg);
             break;
 
+        case RTBM_BLOCKBOUNDS:
+            retval = rtbMethodBlockBounds(cb, cl, o,
+                (struct rtbBlockBounds *)msg);
+            break;
+
         default:
             retval = DoSuperMethodA(cl, o, msg);
             break;
@@ -388,6 +393,39 @@ rtbRender(struct ClassBase *cb, Class *cl, Object *o, struct gpRender *msg)
         return 0;
     }
 
+    /*
+     * ReAction may refresh without GM_LAYOUT after a window size change.
+     * Sync domain so paragraph word-wrap reflows to the new InnerWidth.
+     */
+    {
+        struct Gadget *gad;
+        WORD pad;
+        WORD nw;
+        WORD nh;
+
+        gad = (struct Gadget *)o;
+        nw = gad->Width;
+        nh = gad->Height;
+        if (nw != ld->ld_Width || nh != ld->ld_Height ||
+            gad->LeftEdge != ld->ld_Left || gad->TopEdge != ld->ld_TopEdge)
+        {
+            ld->ld_Left = gad->LeftEdge;
+            ld->ld_TopEdge = gad->TopEdge;
+            ld->ld_Width = nw;
+            ld->ld_Height = nh;
+            pad = ld->ld_WithBevel ? RTB_BEVEL_PAD : 0;
+            ld->ld_InnerLeft = (WORD)(ld->ld_Left + pad);
+            ld->ld_InnerTop = (WORD)(ld->ld_TopEdge + pad);
+            ld->ld_InnerWidth = (WORD)(ld->ld_Width - pad * 2);
+            ld->ld_InnerHeight = (WORD)(ld->ld_Height - pad * 2);
+            if (ld->ld_InnerWidth < 0)
+                ld->ld_InnerWidth = 0;
+            if (ld->ld_InnerHeight < 0)
+                ld->ld_InnerHeight = 0;
+            rtbMarkLayoutDirty(ld);
+        }
+    }
+
     cm = NULL;
     win = NULL;
     if (msg->gpr_GInfo != NULL)
@@ -578,8 +616,16 @@ rtbHandleInput(struct ClassBase *cb, Class *cl, Object *o,
 
                 if (hit.HitKind == RTBH_LINK)
                     ld->ld_RelEvent = RTBE_LINKACTIVATE;
-                else if (hit.HitKind == RTBH_IMAGE)
-                    ld->ld_RelEvent = RTBE_IMAGEACTIVATE;
+                else if (hit.HitKind == RTBH_IMAGE ||
+                    hit.HitKind == RTBH_EMBED)
+                {
+                    /*
+                     * No gallery yet — treat as post select (same path as
+                     * body text). Early GMR_NOREUSE alone left the gadget
+                     * active and crashed Intuition on some clicks.
+                     */
+                    ld->ld_RelEvent = RTBE_BLOCKSELECT;
+                }
                 else if (hit.HitKind == RTBH_CONTROL)
                 {
                     struct RtbRun *r;
@@ -590,7 +636,8 @@ rtbHandleInput(struct ClassBase *cb, Class *cl, Object *o,
                     {
                         r = rtbFindRun(ld, hit.RunID);
                         if (r != NULL && r->rr_Kind == RTBR_CONTROL &&
-                            r->rr_Data.control.ctlKind == RTBC_CHECKBOX)
+                            (r->rr_Data.control.ctlKind == RTBC_CHECKBOX ||
+                             r->rr_Data.control.ctlKind == RTBC_ICON))
                         {
                             r->rr_Style ^= RTBS_CHECKED;
                             ld->ld_CacheDirty = TRUE;

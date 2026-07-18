@@ -92,14 +92,26 @@ CP_TTMapFamily(CONST_STRPTR fontName, ULONG style,
             /* Caller should use TT_FontFile instead */
             family = fontName;
         }
-        else if (tt_name_starts(fontName, "arial") ||
-            tt_name_starts(fontName, "helvetica") ||
-            tt_name_starts(fontName, "sans") ||
-            tt_name_starts(fontName, "emerald") ||
-            tt_name_starts(fontName, "dejavu sans") ||
-            tt_name_starts(fontName, "cgtrium"))
+        else if (tt_name_starts(fontName, "arial"))
         {
             family = "Arial";
+        }
+        else if (tt_name_starts(fontName, "helvetica"))
+        {
+            /* Prefer real Helvetica metrics when installed. */
+            family = "Helvetica";
+        }
+        else if (tt_name_starts(fontName, "dejavu sans") ||
+            tt_name_starts(fontName, "inter") ||
+            tt_name_starts(fontName, "sans") ||
+            tt_name_starts(fontName, "emerald") ||
+            tt_name_starts(fontName, "cgtrium"))
+        {
+            /*
+             * Handles looked squat on Arial Bold — prefer DejaVu Sans
+             * (taller), then Helvetica / Arial via the family table.
+             */
+            family = "DejaVu Sans";
         }
         else if (tt_name_starts(fontName, "courier") ||
             tt_name_starts(fontName, "mono") ||
@@ -171,13 +183,26 @@ CP_TTOpenFace(struct ClassBase *cb, CONST_STRPTR preferName, UWORD sizePx,
 
     familytable[0] = family;
     if (tt_name_starts((STRPTR)family, "Courier"))
+    {
         familytable[1] = (UBYTE *)"monospaced";
-    else if (tt_name_starts((STRPTR)family, "Arial"))
-        familytable[1] = (UBYTE *)"sans-serif";
+        familytable[2] = (UBYTE *)"default";
+        familytable[3] = NULL;
+    }
+    else if (tt_name_starts((STRPTR)family, "DejaVu") ||
+        tt_name_starts((STRPTR)family, "Helvetica") ||
+        tt_name_starts((STRPTR)family, "Arial"))
+    {
+        /* Readable sans stack — taller DejaVu first, then Helvetica/Arial. */
+        familytable[1] = (UBYTE *)"Helvetica";
+        familytable[2] = (UBYTE *)"Arial";
+        familytable[3] = NULL;
+    }
     else
+    {
         familytable[1] = (UBYTE *)"serif";
-    familytable[2] = (UBYTE *)"default";
-    familytable[3] = NULL;
+        familytable[2] = (UBYTE *)"default";
+        familytable[3] = NULL;
+    }
 
     tags[0].ti_Tag = TT_FamilyTable;
     tags[0].ti_Data = (ULONG)familytable;

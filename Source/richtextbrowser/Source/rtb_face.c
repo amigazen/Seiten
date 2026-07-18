@@ -228,8 +228,27 @@ rtb_try_bullet(struct ClassBase *cb, struct localData *ld,
 }
 
 static BOOL
+rtb_name_ends_font(CONST_STRPTR name)
+{
+    ULONG n;
+
+    if (name == NULL)
+        return FALSE;
+    n = strlen((char *)name);
+    if (n < 5)
+        return FALSE;
+    if (name[n - 5] == '.' &&
+        (name[n - 4] == 'f' || name[n - 4] == 'F') &&
+        (name[n - 3] == 'o' || name[n - 3] == 'O') &&
+        (name[n - 2] == 'n' || name[n - 2] == 'N') &&
+        (name[n - 1] == 't' || name[n - 1] == 'T'))
+        return TRUE;
+    return FALSE;
+}
+
+static BOOL
 rtb_try_bitmap(struct ClassBase *cb, struct localData *ld,
-    struct RtbFace *face, CONST_STRPTR name, UWORD size)
+    struct RtbFace *face, CONST_STRPTR name, UWORD size, ULONG style)
 {
     struct TextAttr ta;
     struct TextFont *f;
@@ -239,6 +258,10 @@ rtb_try_bitmap(struct ClassBase *cb, struct localData *ld,
         name : (CONST_STRPTR)"topaz.font");
     ta.ta_YSize = size;
     ta.ta_Style = FS_NORMAL;
+    if (style & RTBS_BOLD)
+        ta.ta_Style |= FSF_BOLD;
+    if (style & RTBS_ITALIC)
+        ta.ta_Style |= FSF_ITALIC;
     ta.ta_Flags = FPF_ROMFONT;
     f = NULL;
     if (cb != NULL && GfxBase != NULL)
@@ -249,10 +272,14 @@ rtb_try_bitmap(struct ClassBase *cb, struct localData *ld,
         if (cb != NULL && GfxBase != NULL)
             f = OpenFont(&ta);
     }
+    /* Diskfont outside GM_RENDER — classic Amiga faces live on FONTS: */
+    if (f == NULL && rtbMayOpenFonts(ld) && DiskfontBase != NULL)
+        f = OpenDiskFont(&ta);
     if (f == NULL)
     {
         ta.ta_Name = (STRPTR)"topaz.font";
         ta.ta_YSize = 8;
+        ta.ta_Style = FS_NORMAL;
         ta.ta_Flags = FPF_ROMFONT;
         if (cb != NULL && GfxBase != NULL)
             f = OpenFont(&ta);
@@ -274,6 +301,7 @@ rtb_try_bitmap(struct ClassBase *cb, struct localData *ld,
         face->rf_OwnsBitmap = TRUE;
     }
     face->rf_Size = size;
+    face->rf_Style = style & (RTBS_BOLD | RTBS_ITALIC);
     if (name != NULL)
     {
         strncpy((char *)face->rf_Name, (char *)name, sizeof(face->rf_Name) - 1);
@@ -309,12 +337,27 @@ rtbFaceResolve(struct ClassBase *cb, struct localData *ld,
         /* Paint path: only ROM topaz metrics — faces should already be warm. */
         face = rtb_face_alloc_slot(cb, ld);
         if (rtb_try_bitmap(cb, ld, face, "topaz.font",
-                (size <= 9) ? size : 8))
+                (size <= 9) ? size : 8, 0))
             return face;
         return NULL;
     }
 
     face = rtb_face_alloc_slot(cb, ld);
+
+    /*
+     * Amiga "*.font" names → bitmap/diskfont first (TT remap made helvetica
+     * squat Arial). CSS / .ttf names still prefer ttengine.
+     */
+    if (rtb_name_ends_font(name))
+    {
+        if (rtb_try_bitmap(cb, ld, face, name, size, styleKey))
+            return face;
+        if (rtb_try_bullet(cb, ld, face, name, size))
+            return face;
+        if (rtb_try_tt(cb, ld, face, name, size, styleKey))
+            return face;
+        return NULL;
+    }
 
     /* 1) TrueType via ttengine.library */
     if (rtb_try_tt(cb, ld, face, name, size, styleKey))
@@ -325,7 +368,7 @@ rtbFaceResolve(struct ClassBase *cb, struct localData *ld,
         return face;
 
     /* 3) Bitmap TextFont last resort */
-    if (rtb_try_bitmap(cb, ld, face, name, size))
+    if (rtb_try_bitmap(cb, ld, face, name, size, styleKey))
         return face;
 
     return NULL;
@@ -370,9 +413,175 @@ rtbFaceTextWidth(struct ClassBase *cb, struct localData *ld,
         return CP_BulletTextWidthFace(cb, &face->rf_Bullet, text, len,
             face->rf_AvgWidth);
     if (face->rf_Bitmap != NULL)
+    {
+        /* Proportional bitmap faces: graphics.library TextLength. */
+        rtbEnsureMeasureRP(cb, ld);
+        if (ld->ld_MeasureOk)
+        {
+            SetFont(&ld->ld_MeasureRP, face->rf_Bitmap);
+            return (WORD)TextLength(&ld->ld_MeasureRP, (STRPTR)text, len);
+        }
         return (WORD)(len * (face->rf_Bitmap->tf_XSize > 0 ?
             face->rf_Bitmap->tf_XSize : 8));
+    }
     return (WORD)(len * rtbFaceAvgWidth(face));
+}
+
+/*
+ * Split at word boundaries using real glyph widths for the active engine.
+ */
+LONG
+rtbFaceWrapText(struct ClassBase *cb, struct localData *ld,
+    struct RtbFace *face, CONST_STRPTR text, ULONG len,
+    WORD colW, WORD startX, RtbFaceWrapEmit emit, APTR ud, WORD *endXOut)
+{
+    WORD lineH;
+    WORD x;
+    LONG y;
+    ULONG pos;
+    ULONG guard;
+
+    if (face == NULL || text == NULL || len == 0)
+    {
+        if (endXOut != NULL)
+            *endXOut = startX;
+        return rtbFaceLineHeight(face);
+    }
+
+    lineH = rtbFaceLineHeight(face);
+    if (lineH < 1)
+        lineH = 10;
+    if (colW < 1)
+        colW = 1;
+
+    x = startX;
+    y = 0;
+    pos = 0;
+    guard = 0;
+
+    while (pos < len)
+    {
+        UBYTE ch;
+        ULONG wend;
+        ULONG wlen;
+        WORD ww;
+        ULONG take;
+
+        if (++guard > 100000UL)
+            break;
+
+        ch = (UBYTE)text[pos];
+        if (ch == (UBYTE)'\n' || ch == (UBYTE)'\r')
+        {
+            y += lineH;
+            x = 0;
+            pos++;
+            if (ch == (UBYTE)'\r' && pos < len &&
+                (UBYTE)text[pos] == (UBYTE)'\n')
+                pos++;
+            continue;
+        }
+
+        /* One word (non-space) or one run of spaces. */
+        wend = pos;
+        if (ch == (UBYTE)' ' || ch == (UBYTE)'\t')
+        {
+            while (wend < len)
+            {
+                ch = (UBYTE)text[wend];
+                if (ch != (UBYTE)' ' && ch != (UBYTE)'\t')
+                    break;
+                wend++;
+            }
+        }
+        else
+        {
+            while (wend < len)
+            {
+                ch = (UBYTE)text[wend];
+                if (ch == (UBYTE)' ' || ch == (UBYTE)'\t' ||
+                    ch == (UBYTE)'\n' || ch == (UBYTE)'\r')
+                    break;
+                wend++;
+            }
+        }
+        wlen = wend - pos;
+        if (wlen < 1)
+            break;
+
+        ww = rtbFaceTextWidth(cb, ld, face, text + pos, wlen);
+
+        /* Soft-wrap before this token if it does not fit on this line. */
+        if (x > 0 && colW > 0 && (WORD)(x + ww) > colW)
+        {
+            y += lineH;
+            x = 0;
+            /* Drop leading spaces after a soft wrap. */
+            if ((UBYTE)text[pos] == (UBYTE)' ' ||
+                (UBYTE)text[pos] == (UBYTE)'\t')
+            {
+                pos = wend;
+                continue;
+            }
+        }
+
+        /*
+         * Overlong word: emit the longest prefix that fits, then wrap.
+         * Never leave pos stuck (always advance at least one glyph).
+         */
+        if (ww > colW && colW > 0)
+        {
+            ULONG lo;
+            ULONG hi;
+            ULONG best;
+
+            lo = 1;
+            hi = wlen;
+            best = 1;
+            while (lo <= hi)
+            {
+                ULONG mid;
+                WORD mw;
+
+                mid = (lo + hi) / 2;
+                mw = rtbFaceTextWidth(cb, ld, face, text + pos, mid);
+                if (mw <= colW)
+                {
+                    best = mid;
+                    lo = mid + 1;
+                }
+                else
+                {
+                    if (mid <= 1)
+                        break;
+                    hi = mid - 1;
+                }
+            }
+            take = best;
+            if (take < 1)
+                take = 1;
+            ww = rtbFaceTextWidth(cb, ld, face, text + pos, take);
+            if (emit != NULL)
+                emit(ud, x, (WORD)y, text + pos, take, ww);
+            pos += take;
+            x = (WORD)(x + ww);
+            if (pos < len)
+            {
+                y += lineH;
+                x = 0;
+            }
+            continue;
+        }
+
+        if (emit != NULL)
+            emit(ud, x, (WORD)y, text + pos, wlen, ww);
+        x = (WORD)(x + ww);
+        pos = wend;
+    }
+
+    if (endXOut != NULL)
+        *endXOut = x;
+    return y + lineH;
 }
 
 void

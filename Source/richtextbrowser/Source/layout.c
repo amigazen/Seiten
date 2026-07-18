@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright 2026 amigazen project
  *
- * layout.c - measure blocks (fixed line metrics; no TextExtent in loops)
+ * layout.c - measure blocks (GM_RENDER path via dirty flag)
  *
- * Width wrapping uses tf_XSize estimates only. Never OpenDiskFont / TextExtent
- * here — those under intuition locks hard-lock on some RTG paths.
+ * Width wrapping uses rtbFaceTextWidth (TT_TextLength / TextLength) with
+ * word boundaries. Never OpenDiskFont here — face cache is warmed earlier.
  */
 
 #include "classbase.h"
@@ -39,7 +39,7 @@ rtb_char_width(struct localData *ld)
     return 8;
 }
 
-/* Word-wrap using character-cell widths only (no graphics.library calls). */
+/* Word-wrap using engine TextLength; soft-break at spaces. */
 static LONG
 rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
     struct RtbBlock *blk, WORD colW)
@@ -50,8 +50,6 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
     LONG y;
     WORD cw;
     ULONG guard;
-
-    (void)cb;
 
     y = 0;
     x = 0;
@@ -66,26 +64,27 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
         CONST_STRPTR text;
         ULONG len;
         UWORD runSize;
+        struct RtbFace *face;
 
         if (++guard > 10000UL)
             break;
 
+        face = NULL;
         runSize = run->rr_Size;
         if (runSize < 1 && blk->rb_Type == RTBB_HEADING)
             runSize = 11;
         if (runSize > 0 || run->rr_FontName != NULL)
         {
             UWORD sz;
-            struct RtbFace *f;
 
             sz = runSize;
             if (sz < 1)
                 sz = 8;
-            f = rtbFaceResolve(cb, ld, run->rr_FontName, sz, run->rr_Style);
-            if (f != NULL)
+            face = rtbFaceResolve(cb, ld, run->rr_FontName, sz, run->rr_Style);
+            if (face != NULL)
             {
-                lineH = rtbFaceLineHeight(f);
-                cw = rtbFaceAvgWidth(f);
+                lineH = rtbFaceLineHeight(face);
+                cw = rtbFaceAvgWidth(face);
             }
             else
                 lineH = rtb_line_height_size(cb, ld, sz);
@@ -145,10 +144,27 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
                 if (ih + 4 > lineH)
                     lineH = (WORD)(ih + 4);
             }
+            else if (run->rr_Data.control.ctlKind == RTBC_ICON)
+            {
+                WORD iw;
+                WORD ih;
+
+                iw = run->rr_Data.control.iw;
+                ih = run->rr_Data.control.ih;
+                if (iw < 1)
+                    iw = 16;
+                if (ih < 1)
+                    ih = 16;
+                ctlw = (WORD)(iw + 4 + (labelW > 0 ? (labelW + 4) : 0));
+                if (ih + 4 > lineH)
+                    lineH = (WORD)(ih + 4);
+            }
             else
                 ctlw = (WORD)(labelW + 16);
-            if (ctlw < 48)
+            if (ctlw < 48 && run->rr_Data.control.ctlKind != RTBC_ICON)
                 ctlw = 48;
+            if (run->rr_Data.control.ctlKind == RTBC_ICON && ctlw < 20)
+                ctlw = 20;
             if (x > 0 && x + ctlw > colW)
             {
                 y += lineH;
@@ -185,11 +201,63 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
             continue;
         }
 
-        /*
-         * Cell-width walk: soft-wrap at colW, hard-break on CR/LF
-         * (Seiten folds handle\\nbody into one run).
-         */
+        if (face == NULL)
         {
+            UWORD sz;
+
+            sz = runSize;
+            if (sz < 1)
+                sz = 8;
+            face = rtbFaceResolve(cb, ld, run->rr_FontName, sz, run->rr_Style);
+        }
+        if (face != NULL)
+        {
+            WORD endX;
+            LONG h;
+            LONG startY;
+            WORD runLineH;
+            BOOL endsNL;
+
+            startY = y;
+            endX = x;
+            runLineH = rtbFaceLineHeight(face);
+            h = rtbFaceWrapText(cb, ld, face, text, len, colW, x,
+                NULL, NULL, &endX);
+            run->rr_W = (WORD)(colW > run->rr_X ? (colW - run->rr_X) : colW);
+            if (run->rr_W < 1)
+                run->rr_W = 1;
+            run->rr_H = (WORD)h;
+            if (run->rr_H < runLineH)
+                run->rr_H = runLineH;
+            /*
+             * Cursor on the run's last line. Always subtract this run's
+             * line height (not the previous run's) so a taller handle
+             * followed by body does not leave y stuck on line 0.
+             */
+            y = startY + h - runLineH;
+            if (y < startY)
+                y = startY;
+            endsNL = FALSE;
+            if (len > 0)
+            {
+                UBYTE last;
+
+                last = (UBYTE)text[len - 1];
+                if (last == (UBYTE)'\n' || last == (UBYTE)'\r')
+                    endsNL = TRUE;
+            }
+            /*
+             * Hard break must clear the prior line when faces differ
+             * (e.g. orphan "\\n" run with a smaller default face).
+             */
+            if (endsNL && y < startY + lineH)
+                y = startY + lineH;
+            x = endX;
+            lineH = runLineH;
+        }
+        else
+        {
+            /* No face — fall back to cell width (should be rare). */
             ULONG i;
             LONG startY;
             WORD cx;
@@ -215,8 +283,6 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
                 cx = (WORD)(cx + cw);
             }
             run->rr_W = (WORD)(colW > run->rr_X ? (colW - run->rr_X) : colW);
-            if (run->rr_W < cw)
-                run->rr_W = cw;
             run->rr_H = (WORD)(y - startY + lineH);
             if (run->rr_H < lineH)
                 run->rr_H = lineH;
@@ -228,7 +294,7 @@ rtb_measure_flow(struct ClassBase *cb, struct localData *ld,
         y += lineH;
 
     blk->rb_Width = colW;
-    return y + 4;
+    return y + RTB_ROW_PAD;
 }
 
 static LONG
@@ -256,6 +322,223 @@ rtb_measure_block(struct ClassBase *cb, struct localData *ld,
             if (blk->rb_Width == 0)
                 blk->rb_Width = 48;
             h += 4;
+            break;
+
+        case RTBB_IMAGEGRID:
+            {
+                struct RtbBlock *ch;
+                UWORD n;
+                UWORD cols;
+                UWORD gap;
+                WORD cellW;
+                WORD maxCellH;
+                UWORD i;
+                LONG rowHeights[4];
+                UWORD rows;
+                LONG rowH;
+                UWORD r;
+
+                n = 0;
+                for (ch = (struct RtbBlock *)
+                        blk->rb_Data.grid.children.mlh_Head;
+                    ch->rb_Node.mln_Succ != NULL;
+                    ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+                {
+                    if (++guard > 1000UL)
+                        break;
+                    n++;
+                }
+                if (n < 1)
+                {
+                    h = 8;
+                    blk->rb_Width = 0;
+                    break;
+                }
+                cols = blk->rb_Data.grid.columns;
+                if (cols < 1)
+                {
+                    if (n <= 1)
+                        cols = 1;
+                    else
+                        cols = 2;
+                }
+                if (cols > n)
+                    cols = n;
+                rows = (UWORD)((n + cols - 1) / cols);
+                if (rows > 4)
+                    rows = 4;
+                gap = blk->rb_Data.grid.gap;
+                if (gap < 1)
+                    gap = RTB_HBOX_GAP;
+                maxCellH = (WORD)blk->rb_Data.grid.maxCellH;
+                if (maxCellH < 1)
+                    maxCellH = 200;
+
+                /*
+                 * Split content width across columns so side-by-side images
+                 * share the gadget viewport; height follows aspect ratio.
+                 */
+                cellW = colW;
+                if (cols > 1)
+                    cellW = (WORD)((colW - (WORD)((cols - 1) * gap)) /
+                        (WORD)cols);
+                if (cellW < 24)
+                    cellW = 24;
+
+                for (r = 0; r < 4; r++)
+                    rowHeights[r] = 0;
+
+                i = 0;
+                for (ch = (struct RtbBlock *)
+                        blk->rb_Data.grid.children.mlh_Head;
+                    ch->rb_Node.mln_Succ != NULL;
+                    ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+                {
+                    UWORD col;
+                    UWORD row;
+                    WORD nw;
+                    WORD nh;
+                    WORD dw;
+                    WORD dh;
+
+                    if (++guard > 1000UL)
+                        break;
+                    col = (UWORD)(i % cols);
+                    row = (UWORD)(i / cols);
+                    if (row >= 4)
+                        break;
+                    nw = (WORD)ch->rb_Data.image.w;
+                    nh = (WORD)ch->rb_Data.image.h;
+                    if (ch->rb_Data.image.bm == NULL &&
+                        ch->rb_Data.image.bitmapObj == NULL)
+                    {
+                        /* Placeholder: span cell width until CDN decode. */
+                        dw = cellW;
+                        dh = (WORD)((cellW * 3) / 4);
+                        if (dh > maxCellH)
+                            dh = maxCellH;
+                    }
+                    else
+                    {
+                        if (nw < 1)
+                            nw = 4;
+                        if (nh < 1)
+                            nh = 3;
+                        /* Shrink to cell — never upscale past decoded pixels. */
+                        if (nw > cellW)
+                        {
+                            dw = cellW;
+                            dh = (WORD)((nh * cellW) / nw);
+                        }
+                        else
+                        {
+                            dw = nw;
+                            dh = nh;
+                        }
+                        if (dh > maxCellH)
+                        {
+                            dh = maxCellH;
+                            dw = (WORD)((nw * maxCellH) / nh);
+                            if (dw > cellW)
+                                dw = cellW;
+                        }
+                    }
+                    if (dw < 1)
+                        dw = 1;
+                    if (dh < 1)
+                        dh = 1;
+
+                    ch->rb_Data.image.w = (UWORD)dw;
+                    ch->rb_Data.image.h = (UWORD)dh;
+                    ch->rb_Width = dw;
+                    ch->rb_Height = dh;
+                    ch->rb_Data.image.maxW = (UWORD)(col * (cellW + gap));
+                    if (dh > (WORD)rowHeights[row])
+                        rowHeights[row] = dh;
+                    i++;
+                }
+
+                i = 0;
+                for (ch = (struct RtbBlock *)
+                        blk->rb_Data.grid.children.mlh_Head;
+                    ch->rb_Node.mln_Succ != NULL;
+                    ch = (struct RtbBlock *)ch->rb_Node.mln_Succ)
+                {
+                    UWORD row;
+                    LONG yoff;
+
+                    if (++guard > 1000UL)
+                        break;
+                    row = (UWORD)(i / cols);
+                    yoff = 0;
+                    for (r = 0; r < row && r < 4; r++)
+                        yoff += rowHeights[r] + gap;
+                    ch->rb_Y = yoff;
+                    i++;
+                }
+                rowH = 0;
+                for (r = 0; r < rows; r++)
+                {
+                    rowH += rowHeights[r];
+                    if (r + 1 < rows)
+                        rowH += gap;
+                }
+                h = rowH + 4;
+                blk->rb_Width = (WORD)(cols * cellW +
+                    (cols > 1 ? (cols - 1) * gap : 0));
+                if (blk->rb_Width > colW)
+                    blk->rb_Width = colW;
+            }
+            break;
+
+        case RTBB_EMBED:
+            {
+                WORD thumbW;
+                WORD thumbH;
+                WORD textW;
+                WORD lineH;
+                WORD cw;
+                LONG textH;
+                ULONG tlen;
+                ULONG dlen;
+                ULONG slen;
+
+                thumbW = (WORD)blk->rb_Data.embed.thumbW;
+                thumbH = (WORD)blk->rb_Data.embed.thumbH;
+                if (thumbW < 0)
+                    thumbW = 0;
+                if (thumbH < 1 && thumbW > 0)
+                    thumbH = 64;
+                lineH = rtb_line_height(ld);
+                cw = rtb_char_width(ld);
+                textW = (WORD)(colW - 12);
+                if (thumbW > 0)
+                    textW = (WORD)(textW - thumbW - 8);
+                if (textW < 40)
+                    textW = 40;
+                textH = 0;
+                tlen = 0;
+                dlen = 0;
+                slen = 0;
+                if (blk->rb_Data.embed.title != NULL)
+                    tlen = strlen((char *)blk->rb_Data.embed.title);
+                if (blk->rb_Data.embed.description != NULL)
+                    dlen = strlen((char *)blk->rb_Data.embed.description);
+                if (blk->rb_Data.embed.site != NULL)
+                    slen = strlen((char *)blk->rb_Data.embed.site);
+                if (tlen > 0 && cw > 0)
+                    textH += ((LONG)((tlen * cw) / textW) + 1) * lineH;
+                if (dlen > 0 && cw > 0)
+                    textH += ((LONG)((dlen * cw) / textW) + 1) * lineH;
+                if (slen > 0)
+                    textH += lineH;
+                if (textH < lineH)
+                    textH = lineH;
+                h = textH + 12;
+                if (thumbH + 12 > h)
+                    h = thumbH + 12;
+                blk->rb_Width = colW;
+            }
             break;
 
         case RTBB_RULE:
@@ -313,17 +596,38 @@ rtb_measure_block(struct ClassBase *cb, struct localData *ld,
                         if (ih + 4 > lineH)
                             lineH = (WORD)(ih + 4);
                     }
+                    else if (run->rr_Data.control.ctlKind == RTBC_ICON)
+                    {
+                        WORD iw;
+                        WORD ih;
+
+                        iw = run->rr_Data.control.iw;
+                        ih = run->rr_Data.control.ih;
+                        if (iw < 1)
+                            iw = 16;
+                        if (ih < 1)
+                            ih = 16;
+                        ctlw = (WORD)(iw + 6 + (labelW > 0 ? (labelW + 4) : 0));
+                        if (ih + 6 > lineH)
+                            lineH = (WORD)(ih + 6);
+                    }
                     else
-                        ctlw = (WORD)(labelW + 16);
-                    if (ctlw < 48)
-                        ctlw = 48;
+                        ctlw = (WORD)(labelW + 20);
+                    if (ctlw < 52 && run->rr_Data.control.ctlKind != RTBC_ICON)
+                        ctlw = 52;
+                    if (run->rr_Data.control.ctlKind == RTBC_ICON && ctlw < 22)
+                        ctlw = 22;
                     run->rr_X = x;
-                    run->rr_Y = 0;
+                    run->rr_Y = (WORD)(RTB_ROW_PAD / 2);
                     run->rr_W = ctlw;
                     run->rr_H = lineH;
-                    x = (WORD)(x + ctlw + 6);
+                    if (run->rr_H < 14)
+                        run->rr_H = 14;
+                    x = (WORD)(x + ctlw + 8);
                 }
-                h = lineH + 4;
+                h = lineH + RTB_ROW_PAD;
+                if (h < 18)
+                    h = 18;
                 blk->rb_Width = colW;
             }
             break;
@@ -381,7 +685,7 @@ rtb_measure_block(struct ClassBase *cb, struct localData *ld,
                     ch->rb_Y = 0;
                     if (ch->rb_Width <= 0)
                         ch->rb_Width = avail;
-                    cx = (WORD)(cx + ch->rb_Width + 4);
+                    cx = (WORD)(cx + ch->rb_Width + RTB_HBOX_GAP);
                     if (ch->rb_Height > maxH)
                         maxH = ch->rb_Height;
                 }
