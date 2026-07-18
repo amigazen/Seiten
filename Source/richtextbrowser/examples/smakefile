@@ -1,0 +1,20 @@
+# examples/smakefile - rtbtest harness (run from examples/)
+# Requires: SYS:Classes/Gadgets/richtextbrowser.gadget installed.
+# AllocRtb* come from the gadget LVOs (OpenLibrary) — no static helpers.
+
+CC = sc
+LD = slink
+RM = delete force quiet
+
+all: rtbtest
+
+# Application link order (Seiten): reaction, sc, amiga LAST.
+rtbtest: rtbtest.o
+	$(LD) FROM LIB:c.o rtbtest.o TO rtbtest \
+		LIB LIB:reaction.lib LIB:sc.lib LIB:amiga.lib
+
+rtbtest.o: rtbtest.c
+	$(CC) rtbtest.c
+
+clean:
+	-$(RM) \#?.o \#?.tmp rtbtest rtbdemo

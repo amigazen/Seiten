@@ -1,0 +1,76 @@
+#  richtextbrowser.gadget build script (SAS/C smake)
+#
+#  Layout matches gfx/page and gfx/vector. AllocRtb* are LVOs in this
+#  library (listbrowser AllocListBrowserNodeA pattern) — apps never
+#  statically link helper objects.
+#
+#  "smake install" copies richtextbrowser.gadget to SYS:Classes/Gadgets/.
+
+MODNAME           = richtextbrowser
+VERSION           = 1
+
+TARGET            = $(MODNAME).gadget
+TARGET_DEBUG      = $(MODNAME).gadget.debug
+
+CC                = sc
+ASM               = asm
+LD                = slink
+RM                = delete force quiet
+
+LDFLAGS           = ADDSYM SC SD MAP $(MODNAME).map HLSXF PLAIN SWIDTH 16
+LDFLAGS_STRIP     = ND
+
+C_SOURCES         = classbase.c dispatch.c attrs.c pool.c doc.c rtballoc.c \
+                    layout.c render.c hit.c cache.c \
+                    canvasplot.c cp_font.c cp_ttfont.c glyphengine.c
+ASM_SOURCES       = classinit.asm endcode.asm
+
+OBJECTS           = classinit.o classbase.o dispatch.o attrs.o pool.o \
+                    doc.o rtballoc.o layout.o render.o hit.o cache.o \
+                    canvasplot.o cp_font.o cp_ttfont.o glyphengine.o endcode.o
+
+LIBS              = LIB:amiga.lib LIB:scm.lib LIB:sc.lib
+
+$(TARGET):      $(TARGET_DEBUG)
+                $(LD) FROM $(TARGET_DEBUG) TO $(TARGET) $(LDFLAGS_STRIP)
+
+$(TARGET_DEBUG): $(OBJECTS) $(LIBS)
+                $(LD) <with <
+FROM $(OBJECTS) TO $(TARGET_DEBUG) LIB $(LIBS) $(LDFLAGS)
+<
+
+.c.o:
+        $(CC) $*.c
+
+.asm.o:
+        $(ASM) $*.asm
+
+classinit.o:    classinit.asm rtb_rev.i classbase.i
+endcode.o:      endcode.asm
+
+classbase.o:    classbase.c classbase.h classdata.h class_iprotos.h
+dispatch.o:     dispatch.c classbase.h classdata.h class_iprotos.h
+attrs.o:        attrs.c classbase.h classdata.h class_iprotos.h
+pool.o:         pool.c classbase.h classdata.h class_iprotos.h
+doc.o:          doc.c classbase.h classdata.h class_iprotos.h
+rtballoc.o:     rtballoc.c classbase.h classdata.h
+layout.o:       layout.c classbase.h classdata.h class_iprotos.h
+render.o:       render.c classbase.h classdata.h class_iprotos.h
+hit.o:          hit.c classbase.h classdata.h class_iprotos.h
+cache.o:        cache.c classbase.h classdata.h class_iprotos.h
+canvasplot.o:   canvasplot.c classbase.h
+cp_font.o:      cp_font.c classbase.h glyphengine.h
+cp_ttfont.o:    cp_ttfont.c classbase.h
+glyphengine.o:  glyphengine.c glyphengine.h classbase.h
+
+clean:
+        -$(RM) \#?.o \#?.bak \#?.lnk
+        -$(RM) $(TARGET) $(TARGET_DEBUG) $(MODNAME).map
+
+install:        $(TARGET)
+        copy $(TARGET) SYS:Classes/Gadgets/$(MODNAME).gadget
+        avail flush
+
+headers:
+        copy include/gadgets/richtextbrowser.h /SDK/Include_h/gadgets/richtextbrowser.h
+        copy include/libraries/canvasplot.h /SDK/Include_h/libraries/canvasplot.h
