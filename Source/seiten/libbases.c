@@ -7,3 +7,6 @@
 #include <exec/libraries.h>
 
 struct Library *AtpBase;
+struct Library *RichTextBrowserBase;
+struct Library *HttpBase;
+struct Library *DataTypesBase;

@@ -8,6 +8,7 @@ RM = delete force quiet
 
 OBJS = main.o cli.o engine.o utf8fold.o imgload.o \
 	gui_main.o gui_timeline.o gui_login.o gui_compose.o gui_speedbar.o \
+	rtb_profile.o \
 	version.o libbases.o
 
 all: Seiten
@@ -33,7 +34,7 @@ imgload.o: imgload.c imgload.h engine.h
 gui_main.o: gui_main.c gui.h engine.h
 	$(CC) gui_main.c
 
-gui_timeline.o: gui_timeline.c gui.h utf8fold.h imgload.h engine.h
+gui_timeline.o: gui_timeline.c gui.h utf8fold.h imgload.h engine.h rtb_profile.h
 	$(CC) gui_timeline.c
 
 gui_login.o: gui_login.c gui.h engine.h
@@ -44,6 +45,9 @@ gui_compose.o: gui_compose.c gui.h engine.h imgload.h
 
 gui_speedbar.o: gui_speedbar.c gui.h engine.h imgload.h
 	$(CC) gui_speedbar.c
+
+rtb_profile.o: rtb_profile.c rtb_profile.h gui.h
+	$(CC) rtb_profile.c
 
 version.o: version.c
 	$(CC) version.c

@@ -4,16 +4,17 @@
  *
  * gui_main.c - Seiten main window (Aeronaut-inspired layout)
  *
- *   [ Post | Reply | Star | Repost | Refresh ]     status…
- *   +--------+----------------------------------+
- *   | Home   |                                  |
- *   | Ment.  |         timeline listbrowser     |
- *   | Feeds  |                                  |
- *   | Search |                                  |
- *   |--------|----------------------------------|
- *   | Profile|  compose string                  |
- *   | Login  |                                  |
- *   +--------+----------------------------------+
+ *   +------+------------------------------------+
+ *   | Home | [Post Reply Star Repost Refresh] st|
+ *   | Ment |------------------------------------|
+ *   | Feeds|     richtextbrowser + scroller     |
+ *   | Srch |                                    |
+ *   | Prof |------------------------------------|
+ *   | Login|  compose string                    |
+ *   +------+------------------------------------+
+ *
+ * Left vertical speedbars are the first (leftmost) pane; the horizontal
+ * action speedbar lives in the second pane above the timeline.
  */
 
 #include <exec/types.h>
@@ -26,14 +27,15 @@
 #include <string.h>
 
 #include "gui.h"
-
 extern struct Library *WindowBase;
 extern struct Library *LayoutBase;
-extern struct Library *ListBrowserBase;
 extern struct Library *ButtonBase;
 extern struct Library *StringBase;
 extern struct Library *SpeedBarBase;
 extern struct Library *LabelBase;
+extern struct Library *ScrollerBase;
+extern struct Library *RichTextBrowserBase;
+
 
 void
 SeitenGuiSetStatus(struct SeitenGui *gui, STRPTR text)
@@ -61,13 +63,28 @@ SeitenGuiSetStatus(struct SeitenGui *gui, STRPTR text)
     }
 }
 
+static void
+gui_init_hints(struct SeitenGui *gui)
+{
+    /*
+     * OS 3.2 ReAction tooltips (boemann): WINDOW_HintInfo may be empty;
+     * real tip strings go on each gadget via GA_GadgetHelpText.
+     * Do not use SBNA_Help / SPEEDBAR_Window — that only rewrites the title bar.
+     */
+    gui->sg_Hints[0].hi_GadgetID = -1;
+    gui->sg_Hints[0].hi_Code = -1;
+    gui->sg_Hints[0].hi_Text = NULL;
+    gui->sg_Hints[0].hi_Flags = 0;
+}
+
 static BOOL
 gui_open_main(struct SeitenGui *gui)
 {
     Object *top_row;
     Object *sidebar;
-    Object *main_col;
-    Object *body;
+    Object *main_pane;
+    Object *timeline_row;
+    Class *rtbClass;
 
     SeitenTimelineInit(gui);
     if (!SeitenSpeedBarsInit(gui)) {
@@ -75,30 +92,49 @@ gui_open_main(struct SeitenGui *gui)
         return FALSE;
     }
 
+    gui_init_hints(gui);
     strcpy((char *)gui->sg_StatusBuf, "Not logged in");
 
-    gui->sg_ListBrowser = ListBrowserObject,
+    if (RichTextBrowserBase == NULL) {
+        PutStr("Seiten: richtextbrowser.gadget missing "
+            "(install SYS:Classes/Gadgets/richtextbrowser.gadget)\n");
+        return FALSE;
+    }
+    rtbClass = RICHTEXTBROWSER_GetClass();
+    if (rtbClass == NULL) {
+        PutStr("Seiten: RICHTEXTBROWSER_GetClass failed\n");
+        return FALSE;
+    }
+
+    gui->sg_Rtb = NewObject(rtbClass, NULL,
         GA_ID, GID_TIMELINE,
         GA_RelVerify, TRUE,
-        LISTBROWSER_Labels, (ULONG)&gui->sg_Posts,
-        LISTBROWSER_ColumnInfo, (ULONG)gui->sg_Columns,
-        LISTBROWSER_ColumnTitles, FALSE,
-        LISTBROWSER_ShowSelected, TRUE,
-        LISTBROWSER_MultiSelect, FALSE,
-        /* AutoFit must stay FALSE or WordWrap will not rewrap (V42). */
-        LISTBROWSER_AutoFit, FALSE,
-        LISTBROWSER_WrapText, TRUE,
-        LISTBROWSER_HorizSeparators, TRUE,
-        LISTBROWSER_VerticalProp, TRUE,
-    ListBrowserEnd;
+        GA_GadgetHelpText,
+            (ULONG)"Timeline - select a post for Reply / Star / Repost",
+        RTB_SelectBlocks, TRUE,
+        RTB_BlockCap, SEITEN_NODE_CAP * 3,
+        RTB_Overscan, 64,
+        TAG_DONE);
+    if (gui->sg_Rtb == NULL) {
+        return FALSE;
+    }
 
-    if (gui->sg_ListBrowser == NULL) {
+    gui->sg_Scroller = ScrollerObject,
+        GA_ID, GID_SCROLLER,
+        GA_RelVerify, TRUE,
+        GA_Immediate, TRUE,
+        GA_GadgetHelpText, (ULONG)"Timeline scroll",
+        SCROLLER_Orientation, SORIENT_VERT,
+        SCROLLER_Arrows, TRUE,
+    ScrollerEnd;
+    if (gui->sg_Scroller == NULL) {
         return FALSE;
     }
 
     gui->sg_SbActions = SpeedBarObject,
         GA_ID, GID_SB_ACTIONS,
         GA_RelVerify, TRUE,
+        GA_GadgetHelpText, (ULONG)"Post / Reply / Star / Repost / Refresh",
         SPEEDBAR_Orientation, SBORIENT_HORIZ,
         SPEEDBAR_Buttons, (ULONG)&gui->sg_ActButtons,
         SPEEDBAR_BevelStyle, BVS_NONE,
@@ -107,6 +143,7 @@ gui_open_main(struct SeitenGui *gui)
     gui->sg_SbNav = SpeedBarObject,
         GA_ID, GID_SB_NAV,
         GA_RelVerify, TRUE,
+        GA_GadgetHelpText, (ULONG)"Home / Mentions / Feeds / Search",
         SPEEDBAR_Orientation, SBORIENT_VERT,
         SPEEDBAR_Buttons, (ULONG)&gui->sg_NavButtons,
         SPEEDBAR_BevelStyle, BVS_NONE,
@@ -115,6 +152,7 @@ gui_open_main(struct SeitenGui *gui)
     gui->sg_SbAcct = SpeedBarObject,
         GA_ID, GID_SB_ACCT,
         GA_RelVerify, TRUE,
+        GA_GadgetHelpText, (ULONG)"Profile / Login",
         SPEEDBAR_Orientation, SBORIENT_VERT,
         SPEEDBAR_Buttons, (ULONG)&gui->sg_AcctButtons,
         SPEEDBAR_BevelStyle, BVS_NONE,
@@ -125,16 +163,7 @@ gui_open_main(struct SeitenGui *gui)
         return FALSE;
     }
 
-    top_row = HLayoutObject,
-        LAYOUT_AddChild, gui->sg_SbActions,
-        CHILD_WeightedWidth, 0,
-        LAYOUT_AddChild, gui->sg_Status = ButtonObject,
-            GA_Text, gui->sg_StatusBuf,
-            GA_ID, GID_STATUS,
-            GA_ReadOnly, TRUE,
-        ButtonEnd,
-    LayoutEnd;
-
+    /* Leftmost pane: vertical nav + account speedbars for full window height */
     sidebar = VLayoutObject,
         LAYOUT_SpaceOuter, FALSE,
         LAYOUT_AddChild, gui->sg_SbNav,
@@ -148,38 +177,57 @@ gui_open_main(struct SeitenGui *gui)
         CHILD_WeightedHeight, 100,
     LayoutEnd;
 
+    top_row = HLayoutObject,
+        LAYOUT_AddChild, gui->sg_SbActions,
+        CHILD_WeightedWidth, 0,
+        CHILD_MinWidth, 160,
+        LAYOUT_AddChild, gui->sg_Status = ButtonObject,
+            GA_Text, gui->sg_StatusBuf,
+            GA_ID, GID_STATUS,
+            GA_ReadOnly, TRUE,
+            GA_GadgetHelpText, (ULONG)"Status",
+        ButtonEnd,
+        CHILD_WeightedWidth, 100,
+    LayoutEnd;
+
     gui->sg_Compose = StringObject,
         GA_ID, GID_COMPOSE,
         GA_RelVerify, TRUE,
         GA_TabCycle, TRUE,
+        GA_GadgetHelpText, (ULONG)"Write a post and press Return",
         STRINGA_MaxChars, 300,
         STRINGA_MinVisible, 40,
         STRINGA_TextVal, "",
     StringEnd;
 
-    main_col = VLayoutObject,
-        LAYOUT_AddChild, gui->sg_ListBrowser,
+    /* Second pane: action bar + timeline + compose */
+    timeline_row = HLayoutObject,
+        LAYOUT_AddChild, gui->sg_Rtb,
+        CHILD_MinHeight, 120,
+        CHILD_WeightedWidth, 100,
+        LAYOUT_AddChild, gui->sg_Scroller,
+        CHILD_WeightedWidth, 0,
+        CHILD_MinWidth, 16,
+    LayoutEnd;
+
+    main_pane = VLayoutObject,
+        LAYOUT_AddChild, top_row,
+        CHILD_WeightedHeight, 0,
+        LAYOUT_AddChild, timeline_row,
         CHILD_MinHeight, 120,
         CHILD_WeightedHeight, 100,
         LAYOUT_AddChild, gui->sg_Compose,
         CHILD_WeightedHeight, 0,
     LayoutEnd;
 
-    body = HLayoutObject,
-        LAYOUT_AddChild, sidebar,
-        CHILD_WeightedWidth, 0,
-        CHILD_MinWidth, 72,
-        LAYOUT_AddChild, main_col,
-        CHILD_WeightedWidth, 100,
-    LayoutEnd;
-
-    gui->sg_Layout = VLayoutObject,
+    gui->sg_Layout = HLayoutObject,
         LAYOUT_SpaceOuter, TRUE,
         LAYOUT_DeferLayout, TRUE,
-        LAYOUT_AddChild, top_row,
-        CHILD_WeightedHeight, 0,
-        LAYOUT_AddChild, body,
-        CHILD_WeightedHeight, 100,
+        LAYOUT_AddChild, sidebar,
+        CHILD_WeightedWidth, 0,
+        CHILD_MinWidth, 40,
+        LAYOUT_AddChild, main_pane,
+        CHILD_WeightedWidth, 100,
     LayoutEnd;
 
     if (gui->sg_Layout == NULL) {
@@ -198,6 +246,8 @@ gui_open_main(struct SeitenGui *gui)
         WA_InnerHeight, 400,
         WA_IDCMP, IDCMP_INTUITICKS,
         WINDOW_Position, WPOS_CENTERSCREEN,
+        WINDOW_GadgetHelp, TRUE,
+        WINDOW_HintInfo, (ULONG)gui->sg_Hints,
         WINDOW_ParentGroup, gui->sg_Layout,
     EndWindow;
 
@@ -215,14 +265,6 @@ gui_open_main(struct SeitenGui *gui)
         return FALSE;
     }
 
-    /* Title-bar help while holding speedbar buttons */
-    SetGadgetAttrs((struct Gadget *)gui->sg_SbActions, gui->sg_Window, NULL,
-        SPEEDBAR_Window, (ULONG)gui->sg_Window, TAG_DONE);
-    SetGadgetAttrs((struct Gadget *)gui->sg_SbNav, gui->sg_Window, NULL,
-        SPEEDBAR_Window, (ULONG)gui->sg_Window, TAG_DONE);
-    SetGadgetAttrs((struct Gadget *)gui->sg_SbAcct, gui->sg_Window, NULL,
-        SPEEDBAR_Window, (ULONG)gui->sg_Window, TAG_DONE);
-
     SeitenTimelineInitPens(gui);
     return TRUE;
 }
@@ -232,7 +274,14 @@ gui_close_main(struct SeitenGui *gui)
 {
     SeitenTimelineFree(gui);
     SeitenTimelineFreePens(gui);
-    SeitenSpeedBarsFree(gui);
+
+    /*
+     * Detach button lists while window + speedbar.gadget are still open,
+     * dispose the window (needs SpeedBarBase), then free nodes / TBImages
+     * and only then TBExit().
+     */
+    SeitenSpeedBarsDetach(gui);
+
     if (gui->sg_WinObj != NULL) {
         if (gui->sg_Window != NULL) {
             RA_CloseWindow(gui->sg_WinObj);
@@ -241,13 +290,16 @@ gui_close_main(struct SeitenGui *gui)
         DisposeObject(gui->sg_WinObj);
         gui->sg_WinObj = NULL;
         gui->sg_Layout = NULL;
-        gui->sg_ListBrowser = NULL;
+        gui->sg_Rtb = NULL;
+        gui->sg_Scroller = NULL;
         gui->sg_Status = NULL;
         gui->sg_Compose = NULL;
         gui->sg_SbActions = NULL;
         gui->sg_SbNav = NULL;
         gui->sg_SbAcct = NULL;
     }
+
+    SeitenSpeedBarsFree(gui);
 }
 
 static BOOL
@@ -262,6 +314,7 @@ gui_handle(struct SeitenGui *gui)
     while ((result = RA_HandleInput(gui->sg_WinObj, &code)) != WMHI_LASTMSG) {
         switch (result & WMHI_CLASSMASK) {
         case WMHI_CLOSEWINDOW:
+            SeitenImgStop(gui);
             quit = TRUE;
             break;
         case WMHI_GADGETUP:
@@ -275,12 +328,24 @@ gui_handle(struct SeitenGui *gui)
                 SeitenComposePost(gui);
                 break;
             case GID_TIMELINE:
-                SeitenTimelineCheckScroll(gui);
+                /*
+                 * Do not CheckScroll/Kick here.  CDN Kick is sync HTTPS;
+                 * running it (or RefreshGList) under GM_HANDLEINPUT notify
+                 * freezes or deadlocks.  INTUITICK drives the image queue;
+                 * post select still arrives via RelVerify for Reply/etc.
+                 */
+                break;
+            case GID_SCROLLER:
+                SeitenTimelineScroller(gui);
                 break;
             }
             break;
         case WMHI_INTUITICK:
-            SeitenTimelineCheckScroll(gui);
+            /* Live prop drag: scroller reports while GA_Immediate is set. */
+            if (!gui->sg_ImgStop) {
+                SeitenTimelineScroller(gui);
+                SeitenTimelineCheckScroll(gui);
+            }
             break;
         }
     }
@@ -298,9 +363,27 @@ SeitenGuiRun(STRPTR cafile, STRPTR handle, STRPTR password,
 
     memset(&gui, 0, sizeof(gui));
 
-    if (WindowBase == NULL || LayoutBase == NULL || ListBrowserBase == NULL ||
-        ButtonBase == NULL || StringBase == NULL || SpeedBarBase == NULL) {
-        PutStr("Seiten: ReAction classes missing (link lib:reaction.lib)\n");
+    /*
+     * WindowBase / LayoutBase / … come from reaction.lib auto-open.
+     * SpeedBarBase is defined and opened by tb.lib in TBInit() (later),
+     * so do not require it here — a NULL SpeedBarBase at this point is normal.
+     * RichTextBrowserBase is opened in libbases / SeitenGuiRun below.
+     */
+    if (WindowBase == NULL || LayoutBase == NULL ||
+        ButtonBase == NULL || StringBase == NULL) {
+        PutStr("Seiten: ReAction classes missing (need CLASSES: + lib:reaction.lib)\n");
+        return RETURN_FAIL;
+    }
+
+    if (RichTextBrowserBase == NULL) {
+        RichTextBrowserBase = OpenLibrary("gadgets/richtextbrowser.gadget", 0);
+    }
+    if (RichTextBrowserBase == NULL) {
+        RichTextBrowserBase = OpenLibrary("richtextbrowser.gadget", 0);
+    }
+    if (RichTextBrowserBase == NULL) {
+        PutStr("Seiten: open richtextbrowser.gadget failed "
+            "(need SYS:Classes/Gadgets/richtextbrowser.gadget)\n");
         return RETURN_FAIL;
     }
 
@@ -309,9 +392,15 @@ SeitenGuiRun(STRPTR cafile, STRPTR handle, STRPTR password,
         return RETURN_FAIL;
     }
 
+    if (!SeitenImgInit(&gui)) {
+        PutStr("Seiten: WARN image loader unavailable "
+            "(CDN thumbs disabled)\n");
+    }
+
     if (!gui_open_main(&gui)) {
         PutStr("Seiten: cannot open main window\n");
         SeitenSpeedBarsFree(&gui);
+        SeitenImgShutdown(&gui);
         SeitenEngineShutdown(&gui.eng);
         return RETURN_FAIL;
     }
@@ -335,9 +424,12 @@ SeitenGuiRun(STRPTR cafile, STRPTR handle, STRPTR password,
     running = TRUE;
     while (running) {
         ULONG got;
+        ULONG waitMask;
 
-        got = Wait(signal | SIGBREAKF_CTRL_C);
+        waitMask = signal | SIGBREAKF_CTRL_C;
+        got = Wait(waitMask);
         if (got & SIGBREAKF_CTRL_C) {
+            SeitenImgStop(&gui);
             running = FALSE;
             break;
         }
@@ -348,11 +440,17 @@ SeitenGuiRun(STRPTR cafile, STRPTR handle, STRPTR password,
         }
     }
 
+    SeitenImgStop(&gui);
     if (gui.sg_LoggedIn) {
         AtpLogout(gui.eng.se_Conn);
         gui.sg_LoggedIn = FALSE;
     }
     gui_close_main(&gui);
+    SeitenImgShutdown(&gui);
     SeitenEngineShutdown(&gui.eng);
+    if (RichTextBrowserBase != NULL) {
+        CloseLibrary(RichTextBrowserBase);
+        RichTextBrowserBase = NULL;
+    }
     return RETURN_OK;
 }

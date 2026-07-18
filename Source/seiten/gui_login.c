@@ -170,15 +170,42 @@ SeitenGuiOpenLogin(struct SeitenGui *gui)
 
                     SeitenGuiSetStatus(gui, (STRPTR)"Logging in...");
                     SetAttrs(winobj, WA_BusyPointer, TRUE, TAG_DONE);
+                    /* Verbose XRPC/TLS lines on the console for this attempt */
+                    SetAtpConnectionAttrs(gui->eng.se_Conn,
+                        ATPA_VERBOSE, TRUE,
+                        TAG_DONE);
                     err = AtpLogin(gui->eng.se_Conn, h, p);
+                    SetAtpConnectionAttrs(gui->eng.se_Conn,
+                        ATPA_VERBOSE, (ULONG)(gui->eng.se_Verbose ? TRUE : FALSE),
+                        TAG_DONE);
                     SetAttrs(winobj, WA_BusyPointer, FALSE, TAG_DONE);
 
                     if (err != 0) {
                         STRPTR es;
+                        UBYTE msg[160];
 
                         es = AtpGetErrorString(err);
-                        SeitenGuiSetStatus(gui,
-                            es != NULL ? es : (STRPTR)"Login failed");
+                        Printf("Seiten: login failed err=%ld (%s) handle=%s ca=%s\n",
+                            err,
+                            es != NULL ? es : (STRPTR)"?",
+                            h,
+                            c != NULL && c[0] != '\0' ? c : (STRPTR)"(none)");
+                        if (err == ERROR_ATP_HTTP) {
+                            strcpy((char *)msg,
+                                "HTTP/TLS failed - check CA file & network");
+                        } else if (err == ERROR_ATP_HTTP_STATUS) {
+                            strcpy((char *)msg,
+                                "Login rejected by server (HTTP status)");
+                        } else if (err == ERROR_ATP_AUTH) {
+                            strcpy((char *)msg,
+                                "Auth failed - use a Bluesky app password");
+                        } else {
+                            strncpy((char *)msg,
+                                es != NULL ? (char *)es : "Login failed",
+                                sizeof(msg) - 1);
+                            msg[sizeof(msg) - 1] = '\0';
+                        }
+                        SeitenGuiSetStatus(gui, msg);
                         gui->sg_LoggedIn = FALSE;
                     } else {
                         gui->sg_LoggedIn = TRUE;

@@ -1,4 +1,4 @@
-FROM     sc:lib/c.o main.o cli.o engine.o utf8fold.o imgload.o gui_main.o gui_timeline.o gui_login.o gui_compose.o gui_speedbar.o version.o libbases.o
-LIB      lib:reaction.lib LIB:sc.lib LIB:amiga.lib
+FROM     sc:lib/c.o main.o cli.o engine.o utf8fold.o imgload.o gui_main.o gui_timeline.o gui_login.o gui_compose.o gui_speedbar.o rtb_profile.o version.o libbases.o
+LIB      ///tb.lib/SDK/lib/tb.lib LIB:reaction.lib LIB:sc.lib LIB:amiga.lib
 NODEBUG
 TO       Seiten

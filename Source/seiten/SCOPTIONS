@@ -1,0 +1,15 @@
+PARAMETERS=REGISTER
+NODEBUG
+CPU=68020
+NOSTACKCHECK
+INCLUDEDIR=/include
+INCLUDEDIR=include:
+INCLUDEDIR=///amiatp/SDK/Include_H
+INCLUDEDIR=///amiatp/Source/include
+INCLUDEDIR=///amihttp/SDK/Include_H
+INCLUDEDIR=///tb.lib/SDK/Include_h
+INCLUDEDIR=/richtextbrowser/Source/include
+INCLUDEDIR=/richtextbrowser/SDK/Include_h
+UTILITYLIBRARY
+IGNORE=315
+IGNORE=316

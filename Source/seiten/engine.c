@@ -85,8 +85,18 @@ SeitenEngineInit(struct SeitenEngine *eng, STRPTR cafile,
         if (verbose) {
             Printf("Seiten: CAFILE=%s\n", cafile);
         }
-    } else if (verbose) {
-        PutStr("Seiten: CAFILE=(none — AmiSSL defaults / AmiTLS needs PEM)\n");
+    } else {
+        /*
+         * AmiTLS needs a PEM CA bundle; AmiSSL may use its own store.
+         * Default PROGDIR:cacert.pem so GUI login works without CAFILE=.
+         */
+        SetAtpConnectionAttrs(eng->se_Conn,
+            ATPA_CA_BUNDLE, (ULONG)"PROGDIR:cacert.pem",
+            TAG_DONE);
+        eng->se_CAFile = (STRPTR)"PROGDIR:cacert.pem";
+        if (verbose) {
+            PutStr("Seiten: CAFILE=PROGDIR:cacert.pem (default)\n");
+        }
     }
     if (service != NULL) {
         SetAtpConnectionAttrs(eng->se_Conn,
